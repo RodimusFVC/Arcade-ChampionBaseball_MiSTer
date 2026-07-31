@@ -48,11 +48,12 @@ module ChampionBaseball
 
 //------------------------------------------------------- Clock enables -------------------------------------------------------//
 
-reg [3:0] cen_cnt = 4'd0;
-always_ff @(posedge clk_49m) cen_cnt <= cen_cnt + 4'd1;
+reg [4:0] cen_cnt = 5'd0;
+always_ff @(posedge clk_49m) cen_cnt <= cen_cnt + 5'd1;
 
-wire cen_cpu = (cen_cnt        == 4'd0);   // 1-in-16 -> 3.072 MHz
-wire cen_pix = (cen_cnt[2:0]   == 3'd0);   // 1-in-8  -> 6.144 MHz
+wire cen_cpu = (cen_cnt[3:0] == 4'd0);   // 1-in-16 -> 3.072 MHz  (18.432/6)
+wire cen_pix = (cen_cnt[2:0] == 3'd0);   // 1-in-8  -> 6.144 MHz  (18.432/3)
+wire cen_ay  = (cen_cnt      == 5'd0);   // 1-in-32 -> 1.536 MHz  (18.432/12)
 
 assign ce_pix = cen_pix;
 
@@ -60,6 +61,8 @@ assign ce_pix = cen_pix;
 
 wire [14:0] maincpu_addr;
 wire  [7:0] maincpu_data;
+wire [15:0] audiocpu_addr;
+wire  [7:0] audiocpu_data;
 wire [13:0] gfx_p01_addr;
 wire  [7:0] gfx_p01_data;
 wire  [9:0] prom_addr;
@@ -82,9 +85,10 @@ champbas_rom rom
     .gfx_p01_addr(gfx_p01_addr),   .gfx_p01_data(gfx_p01_data),
     .prom_addr(prom_addr),         .prom_data(prom_data),
 
-    // Not yet consumed — audio CPU, ALPHA-8201 MCU, and the Exciting Soccer
-    // gfx plane-3 / 4bpp sprite regions. Tied off so the BRAMs still load.
-    .audiocpu_addr(16'd0),         .audiocpu_data(),
+    .audiocpu_addr(audiocpu_addr), .audiocpu_data(audiocpu_data),
+
+    // Not yet consumed — ALPHA-8201 MCU, and the Exciting Soccer gfx
+    // plane-3 / 4bpp sprite regions. Tied off so the BRAMs still load.
     .mcu_addr(13'd0),              .mcu_data(),
     .gfx_p3_addr(13'd0),           .gfx_p3_data(),
     .gfx3_addr(13'd0),             .gfx3_data()
@@ -145,14 +149,33 @@ ChampionBaseball_MAIN main_board
 
 //------------------------------------------------------- Sound board ---------------------------------------------------------//
 
-// NOT YET IMPLEMENTED. champbas sound is:
-//   - AY-3-8910 @ 1.536 MHz on the MAIN board, written by the MAIN CPU at 0x7000
-//     (ay_din / ay_addr_wr / ay_data_wr above are already broken out for it)
-//   - a second Z80 @ 3.072 MHz driving a 6-bit R2R DAC at 0xC000, fed by sound_latch
-// Silent until then. Deliberately NOT wired to the inherited Kangaroo sound board,
-// whose hardware does not match.
+wire signed [15:0] snd_mono;
 
-assign sound_l = 16'sd0;
-assign sound_r = 16'sd0;
+ChampionBaseball_SND snd_board
+(
+    .clk(clk_49m),
+    .cen_cpu(cen_cpu),
+    .cen_ay(cen_ay),
+    .reset(reset),
+    .pause(pause),
+
+    .sound_latch(sound_latch),
+    .sound_latch_wr(sound_latch_wr),
+
+    // The AY physically lives on the MAIN board and is written by the MAIN CPU
+    // at $7000/$7001; only its register writes are routed across.
+    .ay_din(ay_din),
+    .ay_addr_wr(ay_addr_wr),
+    .ay_data_wr(ay_data_wr),
+
+    .rom_addr(audiocpu_addr),
+    .rom_data(audiocpu_data),
+
+    .sound_out(snd_mono)
+);
+
+// champbas is mono (single SPEAKER, champbas.cpp:998)
+assign sound_l = snd_mono;
+assign sound_r = snd_mono;
 
 endmodule
