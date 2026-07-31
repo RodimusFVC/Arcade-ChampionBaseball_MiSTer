@@ -202,11 +202,16 @@ module ChampionBaseball_MAIN
     end
 
     ////////////////////////////////////////////////////////////////////////
-    // Main RAM — 8800-8FFF (2KB). Port B is reserved for the sprite engine's
-    // attribute reads at 8FF0-8FFF; unused while sprites are stubbed.
+    // Main RAM — 8800-8FFF (2KB).
+    //
+    // Port B serves the sprite engine's attribute reads. champbas keeps sprite
+    // code/colour/flip in MAIN RAM at 8FF0-8FFF (champbas.cpp:399), which is
+    // offset 0x7F0 within this 2KB region — NOT in spriteram.
     ////////////////////////////////////////////////////////////////////////
 
     wire [7:0] ram_dout;
+    wire [3:0] spr_attr_addr;
+    wire [7:0] spr_attr_data;
 
     dpram_dc #(.widthad_a(11), .width_a(8)) main_ram
     (
@@ -217,11 +222,15 @@ module ChampionBaseball_MAIN
         .q_a(ram_dout),
 
         .clock_b(clk),
-        .address_b(11'd0),
+        .address_b({7'h7F, spr_attr_addr}),
         .data_b(8'd0),
         .wren_b(1'b0),
-        .q_b()
+        .q_b(spr_attr_data)
     );
+
+    // Sprite position RAM read port (combinational — it is a register array)
+    wire [3:0] spr_pos_addr;
+    wire [7:0] spr_pos_data = spriteram[spr_pos_addr];
 
     ////////////////////////////////////////////////////////////////////////
     // Video
@@ -248,6 +257,11 @@ module ChampionBaseball_MAIN
         .gfx_data(gfx_data),
         .prom_addr(prom_addr),
         .prom_data(prom_data),
+
+        .spr_pos_addr(spr_pos_addr),
+        .spr_pos_data(spr_pos_data),
+        .spr_attr_addr(spr_attr_addr),
+        .spr_attr_data(spr_attr_data),
 
         .clk_dl(clk_dl),
         .ioctl_download(ioctl_download),

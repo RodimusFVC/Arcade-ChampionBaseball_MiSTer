@@ -45,6 +45,14 @@ module ChampionBaseball_VIDEO
     output       [9:0]  prom_addr,
     input        [7:0]  prom_data,
 
+    // ---- sprite sources. champbas splits them across TWO memories:
+    //   position (x/y) in spriteram  0xA060-0xA06F
+    //   code/colour/flip in MAIN RAM 0x8FF0-0x8FFF   (champbas.cpp:395-403)
+    output       [3:0]  spr_pos_addr,
+    input        [7:0]  spr_pos_data,
+    output       [3:0]  spr_attr_addr,
+    input        [7:0]  spr_attr_data,
+
     // ---- palette PROM snoop (see PALETTE PROM note below)
     input               clk_dl,
     input               ioctl_download,
@@ -206,7 +214,10 @@ module ChampionBaseball_VIDEO
     reg  [7:0] byte_lo_lat, byte_hi_lat;
 
     reg [13:0] gfx_addr_r;
-    assign gfx_addr = gfx_addr_r;
+    // The gfx ROM has one read port, shared between the tilemap fetch and the
+    // sprite engine. They never overlap: sprites run h_cnt 260..~324 (inside
+    // hblank), the tilemap runs 0..255 plus its prime window from 376.
+    assign gfx_addr = spr_busy ? spr_gfx_addr : gfx_addr_r;
 
     // Char tiles occupy the low half of the index-2 region (0x0000-0x1FFF);
     // sprites occupy 0x2000-0x3FFF. Hence the leading 1'b0.
@@ -300,23 +311,154 @@ module ChampionBaseball_VIDEO
     wire [7:0] tile_pen = {1'b1, color_lat[4:0], tile_pix};
 
     ////////////////////////////////////////////////////////////////////////
-    // SPRITE STUB — not yet implemented.
+    // SPRITE ENGINE  (champbas.cpp:387-418)
     //
-    // champbas.cpp:387-418. 8 sprites, iterated offs=0x0E down to 0 step -2.
-    //   x/y   from spriteram 0xA060-0xA06F
-    //   code/colour/flip from MAIN RAM 0x8FF0-0x8FFF  (not spriteram!)
-    //   sx = spriteram[offs+1] - 16 ; sy = 255 - spriteram[offs]
-    //   flipx = ~attr & 1, flipy = ~attr & 2   (both ACTIVE LOW)
-    //   drawn twice: at sx and at sx+256 (horizontal wraparound)
-    // Priority is sprites OVER the tilemap (screen_update_champbas :465
-    // draws the tilemap first, then sprites).
+    // 8 sprites, 16x16, 2bpp. MAME iterates offs = 0x0E down to 0 step -2,
+    // so sprite 7 is drawn FIRST and sprite 0 LAST — sprite 0 therefore wins
+    // overlaps. Rendering in that same order into a line buffer, with later
+    // writes overwriting, reproduces that priority exactly.
     //
-    // Until implemented, the sprite layer is permanently transparent so the
-    // tilemap can be brought up and verified on its own.
+    //   sx    = spriteram[offs+1] - 16
+    //   sy    = 255 - spriteram[offs]
+    //   code  = (attr[offs]   >> 2 & 0x3f) | (gfx_bank << 6)
+    //   color = (attr[offs+1] & 0x1f)      | (palette_bank << 6)
+    //   flipx = ~attr[offs] & 1      flipy = ~attr[offs] & 2   (ACTIVE LOW)
+    //
+    // MAME also draws each sprite a second time at sx+256 for horizontal
+    // wraparound. That falls out for free here: the line buffer is 256 wide
+    // and its write address is masked to 8 bits, so a sprite straddling the
+    // edge wraps by construction. No second pass needed.
+    //
+    // Timing: rendering runs during HBLANK for the NEXT line. Budget is
+    // 128 blanked pixels x 8 clk = 1024 clk; the pass needs 256 (clear) +
+    // 8x28 (sprites) = 480.
     ////////////////////////////////////////////////////////////////////////
 
-    wire       spr_opaque = 1'b0;
-    wire [7:0] spr_pen    = 8'd0;
+    // Line buffer, double buffered. {valid, 8-bit palette pen}.
+    reg  [8:0] linebuf [0:511];
+    reg  [8:0] lb_q;
+    reg        lb_bank = 1'b0;          // buffer being WRITTEN this line
+
+    reg        lb_we;
+    reg  [7:0] lb_waddr;
+    reg  [8:0] lb_wdata;
+    wire [7:0] lb_raddr = sx;
+
+    always_ff @(posedge clk) begin
+        if (lb_we) linebuf[{lb_bank, lb_waddr}] <= lb_wdata;
+        lb_q <= linebuf[{~lb_bank, lb_raddr}];
+    end
+
+    // Target line for this render pass = the line about to be displayed.
+    wire [7:0] spr_line = (v_raw + 8'd1) ^ {8{flip_screen}};
+
+    localparam [8:0] SPR_START = 9'd260;    // just inside hblank (H_VIS = 256)
+    localparam [9:0] SPR_END   = 10'd511;   // 256 clear + 8 sprites x 32
+
+    // NOTE: this FSM is clocked on `clk`, NOT gated by cen_pix. It needs 512
+    // steps and there are only ~124 cen_pix ticks left in the line after
+    // SPR_START — but 8 clk per pixel gives ~992 clk, which fits comfortably.
+    // The pass finishes around h_cnt 324, well before the tilemap's column-0
+    // prime window opens at 376, so the two never contend for the gfx ROM.
+    reg  [9:0] spr_ctr;
+    reg        spr_busy;
+    reg        spr_start_d;
+
+    reg  [7:0] s_y, s_x, s_a0, s_a1;
+    reg  [3:0] s_row;                   // row within the sprite, flipy applied
+    reg        s_active;
+
+    wire [7:0] sp        = spr_ctr[7:0];        // index within the sprite phase
+    wire [2:0] spr_idx   = sp[7:5];
+    wire [4:0] spr_phase = sp[4:0];
+    wire       in_sprites = (spr_ctr >= 10'd256);
+
+    // MAME draws offs 0x0E down to 0, i.e. sprite 7 first and 0 last.
+    wire [2:0] s_num = 3'd7 - spr_idx;
+
+    // spriteram read is COMBINATIONAL in MAIN (a reg array); the attribute read
+    // comes from main-RAM port B and is REGISTERED, hence the one-phase offset.
+    assign spr_pos_addr  = {s_num, (spr_phase == 5'd1)};
+    assign spr_attr_addr = {s_num, (spr_phase >= 5'd3)};
+
+    wire [7:0] s_top     = 8'd255 - s_y;
+    wire [7:0] s_dy      = spr_line - s_top;
+    wire       s_on_line = (s_dy < 8'd16);
+    wire       s_flipx   = ~s_a0[0];
+    wire       s_flipy   = ~s_a0[1];
+    wire [6:0] s_code    = {gfx_bank, s_a0[7:2]};
+    wire [5:0] s_color   = {palette_bank, s_a1[4:0]};
+
+    // Two pixel indices, one phase apart: we ADDRESS the gfx ROM for pixel
+    // s_px_addr while WRITING pixel s_px, because the ROM output is registered.
+    wire [3:0] s_px      = spr_phase - 5'd8;    // written   at phases 8..23
+    wire [3:0] s_px_addr = spr_phase - 5'd7;    // addressed at phases 7..22
+
+    wire [3:0] s_sx_w = s_flipx ? (4'd15 - s_px)      : s_px;
+    wire [3:0] s_sx_a = s_flipx ? (4'd15 - s_px_addr) : s_px_addr;
+
+    // base byte per 4-pixel chunk is {8,16,24,0} -> 8*((chunk+1)&3)
+    wire [1:0] s_k = s_sx_a[3:2] + 2'd1;
+    wire [13:0] spr_gfx_addr = {1'b1, s_code, s_row[3], s_k, s_row[2:0]};
+
+    wire [1:0] s_xic = ~s_sx_w[1:0];
+    wire       s_p0  = gfx_data[{1'b1, s_xic}];   // high nibble -> plane 0
+    wire       s_p1  = gfx_data[{1'b0, s_xic}];   // low  nibble -> plane 1
+    wire [1:0] s_pix = {s_p0, s_p1};
+
+    always_ff @(posedge clk) begin
+        lb_we       <= 1'b0;
+        spr_start_d <= (h_cnt == SPR_START);
+
+        if (reset) begin
+            spr_busy <= 1'b0;
+            spr_ctr  <= 10'd0;
+            lb_bank  <= 1'b0;
+        end else begin
+            // one-shot on entering the start column
+            if ((h_cnt == SPR_START) && !spr_start_d) begin
+                spr_busy <= 1'b1;
+                spr_ctr  <= 10'd0;
+            end else if (spr_busy) begin
+                spr_ctr <= spr_ctr + 10'd1;
+
+                if (!in_sprites) begin
+                    // clear the buffer we are about to render into
+                    lb_we    <= 1'b1;
+                    lb_waddr <= spr_ctr[7:0];
+                    lb_wdata <= 9'd0;
+                end else begin
+                    case (spr_phase)
+                        5'd0: s_y  <= spr_pos_data;     // spriteram[2n]
+                        5'd1: s_x  <= spr_pos_data;     // spriteram[2n+1]
+                        5'd3: s_a0 <= spr_attr_data;    // mainram[0x7F0+2n]
+                        5'd4: s_a1 <= spr_attr_data;    // mainram[0x7F1+2n]
+                        5'd5: begin
+                            s_active <= s_on_line;
+                            s_row    <= s_flipy ? (4'd15 - s_dy[3:0]) : s_dy[3:0];
+                        end
+                        default: ;
+                    endcase
+
+                    // pen 0 is transparent, so it is simply not written —
+                    // which is also what leaves the tilemap showing through.
+                    if (spr_phase >= 5'd8 && spr_phase <= 5'd23
+                        && s_active && s_pix != 2'b00) begin
+                        lb_we    <= 1'b1;
+                        lb_waddr <= (s_x - 8'd16) + {4'd0, s_px};
+                        lb_wdata <= {1'b1, s_color, s_pix};
+                    end
+                end
+
+                if (spr_ctr == SPR_END) spr_busy <= 1'b0;
+            end
+
+            if (cen_pix && (h_cnt == H_TOTAL - 9'd1)) lb_bank <= ~lb_bank;
+        end
+    end
+
+    wire       spr_opaque = lb_q[8];
+    wire [7:0] spr_pen    = lb_q[7:0];
 
     ////////////////////////////////////////////////////////////////////////
     // Colour lookup
