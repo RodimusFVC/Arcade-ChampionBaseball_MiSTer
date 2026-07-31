@@ -1,6 +1,6 @@
 //============================================================================
 //
-// Kangaroo for MiSTer
+// ChampionBaseball for MiSTer
 // Copyright (C) 2026 Rodimus
 // Based on Tutankham core structure
 //
@@ -210,12 +210,26 @@ assign BUTTONS = 0;
 
 wire [1:0] ar = status[14:13];
 
-assign VIDEO_ARX = status[12] ? ((!ar) ? 12'd4 : (ar - 1'd1)) : ((!ar) ? 12'd3 : (ar - 1'd1));
-assign VIDEO_ARY = status[12] ? ((!ar) ? 12'd3 : 12'd0) : ((!ar) ? 12'd4 : 12'd0);
+// set_id: MRA index 5, captured inside champbas_rom and exposed by the game top.
+// Declared HERE, ahead of its first use in the aspect logic below — a forward reference would
+// implicitly create a 1-bit net and then collide with the real 8-bit declaration.
+//   0x00-0x06 champbas family (ROT0)   0x07 talbot   0x08-0x0A exctsccr family   (both ROT270)
+wire [7:0] set_id;
+wire is_vertical = (set_id >= 8'h07);
+
+// ASPECT-FIX-2026-07-30: was hard-wired to Kangaroo's ROT90 orientation, so champbas (ROT0)
+// got squashed into a 3:4 portrait window. Aspect must follow the SAME set_id split as the
+// rotation logic further down: champbas family (set_id <= 0x06) is horizontal 4:3; talbot and
+// the exctsccr family (0x07-0x0A) are ROT270 and want 3:4.
+// `horz` = the picture ends up horizontal, i.e. a ROT0 set, OR the user forced Horz in the OSD.
+wire horz = ~is_vertical | status[12];
+
+assign VIDEO_ARX = horz ? ((!ar) ? 12'd4 : (ar - 1'd1)) : ((!ar) ? 12'd3 : (ar - 1'd1));
+assign VIDEO_ARY = horz ? ((!ar) ? 12'd3 : 12'd0) : ((!ar) ? 12'd4 : 12'd0);
 
 `include "build_id.v"
 localparam CONF_STR = {
-	"KANGAROO;;",
+	"CHAMPIONBASEBALL;;",
 	"ODE,Aspect Ratio,Original,Full screen,[ARC1],[ARC2];",
 	"OC,Orientation,Vert,Horz;",
 	"OB,Flip Vertical,Off,On;",
@@ -231,8 +245,8 @@ localparam CONF_STR = {
 	"DIP;",
 	"-;",
 	"R0,Reset;",
-	"J1,Button1,Button2,Coin,Start 1P,Start 2P,Pause;",
-	"jn,A,B,Select,Start,R,L;",
+	"J1,Throw,Steal,Changes,Coin,Start 1P,Start 2P,Pause;",
+	"jn,A,B,X,Select,Start,R,L;",
 	"V,v",`BUILD_DATE
 };
 
@@ -258,7 +272,7 @@ wire        direct_video;
 
 hps_io #(.CONF_STR(CONF_STR)) hps_io
 (
-	.clk_sys(CLK_10M),
+	.clk_sys(CLK_49M),
 	.HPS_BUS(HPS_BUS),
 	.EXT_BUS(),
 	.gamma_bus(gamma_bus),
@@ -286,20 +300,24 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 );
 
 ////////////////////   CLOCKS   ///////////////////
-wire CLK_40M;
-wire CLK_10M;
+// CLOCK-2026-07-30: single 49.152 MHz PLL, taken verbatim from Arcade-Kyugo
+// (rtl/pll.v + rtl/pll/pll_0002.v). It divides EXACTLY for this board:
+//     49.152 / 16 = 3.072 MHz = XTAL 18.432 / 6  -> both Z80s
+//     49.152 /  8 = 6.144 MHz = XTAL 18.432 / 3  -> pixel clock
+// The previous Kangaroo PLL emitted 40 MHz + 10 MHz, neither of which divides
+// to either figure. The cen dividers themselves live in rtl/ChampionBaseball.sv.
+wire CLK_49M;
 wire locked;
 
 pll pll
 (
     .refclk(CLK_50M),
     .rst(0),
-    .outclk_0(CLK_40M),
-    .outclk_1(CLK_10M),
+    .outclk_0(CLK_49M),
     .locked(locked)
 );
 
-assign CLK_VIDEO = CLK_40M;   // HDMI needs the 40 MHz reference
+assign CLK_VIDEO = CLK_49M;
 
 wire reset = RESET | status[0] | buttons[1] | ioctl_download;
 
@@ -320,7 +338,7 @@ reg btn_service  = 0;
 
 wire pressed = ~ps2_key[9];
 wire [7:0] code = ps2_key[7:0];
-always @(posedge CLK_10M) begin
+always @(posedge CLK_49M) begin
 	reg old_state;
 	old_state <= ps2_key[10];
 	if(old_state != ps2_key[10]) begin
@@ -343,55 +361,55 @@ always @(posedge CLK_10M) begin
 end
 
 //////////////////  Game select (mod byte, MRA <rom index="5">)  ///////////////////////////
-// GAMESEL-2026-06-21: MRA `<rom index="5"><part>01</part></rom>` => Funky Fish; absent => Kangaroo (mod=0).
-// Cleared at each download start so Kangaroo MRAs (no index-5 byte) read mod=0 with NO MRA edits.
-// (index 1 = sound ROM, index 4 = NVRAM — both taken; 5 is free.)
-reg  [7:0] core_mod = 8'd0;
-// GAMESEL-FIX-2026-06-21: dropped the download-start reset — it cleared core_mod when the index-4 NVRAM load
-// (a separate ioctl_download transaction) re-raised ioctl_download AFTER the mod byte was captured. Now mirrors
-// the proven Kyugo pattern (Arcade-Kyugo.sv:494 — simple capture, no reset). Original below:
-// reg ioctl_download_d = 1'b0;
-// always @(posedge CLK_10M) begin
-//     ioctl_download_d <= ioctl_download;
-//     if (ioctl_download & ~ioctl_download_d)    core_mod <= 8'd0;       // download start
-//     else if (ioctl_wr & (ioctl_index == 8'd5)) core_mod <= ioctl_dout;
-// end
-always @(posedge CLK_10M)
-	if (ioctl_wr & (ioctl_index == 8'd5))
-		core_mod <= ioctl_dout;
-wire is_funkyfish = (core_mod == 8'd1);
-// MCU-2026-06-22: index-5 bit1 = MB8841 fitted (original kangaroo/kangarooa MRAs set 0x02). Bootleg & Funky
-// Fish leave it clear -> mcu_present=0 -> boot-pulse NMI path (unchanged). is_funkyfish stays an == 0x01 test.
-wire mcu_present = core_mod[1];
+// CONTROLS-2026-07-30: the whole Kangaroo game-select block (core_mod / is_funkyfish / mcu_present)
+// is gone — set_id now comes OUT of the core (champbas_rom captures MRA index 5) rather than being
+// decoded here, and neither Funky Fish nor the MB8841 exists on this hardware.
 
 //////////////////  Arcade Buttons/Interfaces   ///////////////////////////
 
+// champbas has THREE buttons (INPUT_PORTS champbas, champbas.cpp:761-771):
+//   BUTTON1 "throw" (red) · BUTTON2 "steal" (yellow) · BUTTON3 "changes" (blue)
+// Kangaroo had one, so every joystick slot AFTER the buttons shifts up by one versus what this
+// file inherited. CONF_STR's J1 list is updated to match, and the MRAs' <buttons names=...> use
+// the same order. Getting these out of step is what regressed Nibbler in the SNK6502 core.
+//   joystick bits: [3:0] up/down/left/right, [4] throw, [5] steal, [6] changes,
+//                  [7] coin, [8] start1, [9] start2, [10] pause
+
 //Player 1
-// GAMESEL-2026-06-21: joystick_0[4] (Button1 / "Bubbles") is the KANGAROO jump-assist hack — for Funky Fish
-// it becomes the 2nd game button (IN1 bit 0x20) instead, so drop it from UP there.
-// Original: wire m_up1 = btn_up | joystick_0[3] | joystick_0[4];
-wire m_up1      = btn_up        | joystick_0[3]  | (is_funkyfish ? 1'b0 : joystick_0[4]);
+wire m_up1      = btn_up        | joystick_0[3];
 wire m_down1    = btn_down      | joystick_0[2];
 wire m_left1    = btn_left      | joystick_0[1];
 wire m_right1   = btn_right     | joystick_0[0];
-wire m_punch_p1 = btn_fire      | joystick_0[5];
+wire m_throw1   = btn_fire      | joystick_0[4];
+wire m_steal1   = btn_fire2     | joystick_0[5];
+wire m_change1  =                 joystick_0[6];
 
-//Player 2
-wire m_up2      = btn_up		| joystick_1[3]  | (is_funkyfish ? 1'b0 : joystick_1[4]);
+//Player 2 (cocktail)
+wire m_up2      = btn_up        | joystick_1[3];
 wire m_down2    = btn_down      | joystick_1[2];
 wire m_left2    = btn_left      | joystick_1[1];
 wire m_right2   = btn_right     | joystick_1[0];
-wire m_punch_p2 = btn_fire      | joystick_1[5];
+wire m_throw2   = btn_fire      | joystick_1[4];
+wire m_steal2   = btn_fire2     | joystick_1[5];
+wire m_change2  =                 joystick_1[6];
 
 //Start/Coin
-wire m_start1   = btn_1p_start  | joystick_0[7];
-wire m_start2   = btn_2p_start  | joystick_0[8];
-wire m_coin1    = btn_coin1     | joystick_0[6];
-wire m_coin2    = btn_coin2     | joystick_1[6];
-wire m_pause    = btn_pause     | joystick_0[9];
+wire m_coin1    = btn_coin1     | joystick_0[7];
+wire m_coin2    = btn_coin2     | joystick_1[7];
+wire m_start1   = btn_1p_start  | joystick_0[8];
+wire m_start2   = btn_2p_start  | joystick_0[9];
+wire m_pause    = btn_pause     | joystick_0[10];
 
 //Service Mode
 wire m_service  = btn_service                  ;
+
+// MAME port assembly. All champbas inputs are IP_ACTIVE_LOW, so these invert.
+//   P1/P2 : b0 BUTTON1(throw)  b1 unused  b2 BUTTON3(changes)  b3 BUTTON2(steal)
+//           b4 UP  b5 LEFT  b6 RIGHT  b7 DOWN                    (champbas.cpp:711-714, 762-765)
+//   SYSTEM: b0 START1  b1 START2  b2 COIN1  b3 COIN2  b4-7 unknown   (:748-755)
+wire [7:0] p1_port     = ~{m_down1, m_right1, m_left1, m_up1, m_steal1, m_change1, 1'b0, m_throw1};
+wire [7:0] p2_port     = ~{m_down2, m_right2, m_left2, m_up2, m_steal2, m_change2, 1'b0, m_throw2};
+wire [7:0] system_port = ~{4'b0000, m_coin2, m_coin1, m_start2, m_start1};
 
 // PAUSE SYSTEM
 wire pause_cpu;
@@ -399,7 +417,7 @@ wire [23:0] rgb_out;
 pause #(8,8,8,10) pause
 (
 	.*,
-	.clk_sys(CLK_10M),
+	.clk_sys(CLK_49M),
 	.user_button(m_pause),
 	.pause_request(hs_pause),
 	.options(~status[26:25])
@@ -412,27 +430,26 @@ wire hs, vs;
 wire [7:0] r, g, b;
 wire ce_pix;
 
-// DIAG-2026-06-18: 2x pixel clock for "double the size then reduce". arcade_video now renders 512 px/line
-// (each of the 256 source columns doubled -> MAME-style dimmed-copy interleave); screen_rotate + the
-// scaler then shrink the 512-wide framebuffer back to the display ("reduce the resolution/size").
-// ce_pix MUST be a CLK_40M-domain pulse: the core's 5 MHz ce_pix lives in the 10 MHz domain and can't be
-// cleanly doubled there. Phase (==2) samples mid-period after the core's RGB settles; if pixels shimmer
-// or smear horizontally, try ==1 or ==3. To revert: arcade_video back to #(256,24) and drop .ce_pix below.
-reg [1:0] ce_pix_div = 2'd0;
-always @(posedge CLK_40M) ce_pix_div <= ce_pix_div + 1'd1;
-wire ce_pix_2x = (ce_pix_div == 2'd2);   // 10 MHz, 1-in-4 of CLK_40M
+// CLOCK-2026-07-30: the DIAG-2026-06-18 "2x pixel clock" block was removed here, following its own
+// documented revert path ("arcade_video back to #(256,24) and drop .ce_pix below"). It existed to
+// double Kangaroo's 5 MHz ce_pix out of the 10 MHz domain into the 40 MHz domain. Both of those
+// clocks are gone: the core now runs entirely on CLK_49M and emits a real 6.144 MHz ce_pix, so
+// arcade_video can take the core's own ce_pix through .* with no doubling.
 
-wire rotate_ccw = 0;  // Kangaroo is ROT90 (CW)
-wire no_rotate = status[12] | direct_video;
-wire flip = status[11] | ~no_rotate;
+// ROTATION: champbas is ROT0 (horizontal). Talbot and the whole Exciting Soccer family are ROT270.
+// Driven off the MRA set-id rather than hard-coded, since one core serves all three variants.
+//   0x00-0x06 champbas family (ROT0)   0x07 talbot   0x08-0x0A exctsccr family (both ROT270)
+// #unverified: not yet checked on hardware for the ROT270 sets.
+wire rotate_ccw  = 1'b1;                                    // ROT270 = counter-clockwise
+wire no_rotate   = ~is_vertical | status[12] | direct_video;
+wire flip        = status[11];
 screen_rotate screen_rotate(.*);
 
-arcade_video #(512,24) arcade_video   // DIAG-2026-06-18: was #(256,24) — 512 px/line (256 cols doubled), scaler reduces
+arcade_video #(256,24) arcade_video
 (
 	.*,
 
-	.clk_video(CLK_40M),
-	.ce_pix(ce_pix_2x),   // DIAG-2026-06-18: 10 MHz (overrides the core's 5 MHz ce_pix that .* would pick)
+	.clk_video(CLK_49M),
 
 	.RGB_in(rgb_out),
 	.HBlank(hblank),
@@ -448,30 +465,29 @@ arcade_video #(512,24) arcade_video   // DIAG-2026-06-18: was #(256,24) — 512 
 // Was `sw0 = status[7:0]` — a placeholder that never received the OSD DIP edits → "always 3 lives". Mirrors
 // Kyugo (Arcade-Kyugo.sv:487). The MRA <switches default=..> is downloaded here; sw0 = DSW0 (read at 0xe400).
 reg [7:0] dip_sw[8] = '{8'h00,8'h00,8'h00,8'h00,8'h00,8'h00,8'h00,8'h00};
-always @(posedge CLK_10M) begin
+always @(posedge CLK_49M) begin
 	if (ioctl_wr && (ioctl_index == 8'd254) && !ioctl_addr[24:3])
 		dip_sw[ioctl_addr[2:0]] <= ioctl_dout;
 end
 wire [7:0] sw0 = dip_sw[0];
 
-//Instantiate Kangaroo top-level game module
-Kangaroo kangaroo_inst
+//Instantiate ChampionBaseball top-level game module
+ChampionBaseball championbaseball_inst
 (
-	.reset(~reset),       // MiSTer reset is active-high; invert for active-low game modules
+	// RESET-FIX-2026-07-30: was `.reset(~reset)`. That inversion existed because the KANGAROO game
+	// module took an ACTIVE-LOW reset. Every champbas module is written active-high
+	// (`if (reset) h_cnt <= 0`, `.RESET_n(~reset)` into T80s), so the inversion held the entire core
+	// in permanent reset: h_cnt/v_cnt never left 0, HSync/VSync were stuck low, no sync at all.
+	.reset(reset),        // MiSTer reset is active-high; champbas modules are active-high too
 
-	.clk_10m(CLK_10M),
+	.clk_49m(CLK_49M),
 
-	// IN0: {coin_r, coin_l, start2, start1, service} active-high
-	.in0({m_coin2, m_coin1, m_start2, m_start1, m_service}),
-	// IN1: {punch, down, up, left, right} P1 active-high
-	// GAMESEL-2026-06-21: in1 widened 5->8; bit5 (0x20) = Funky Fish 2nd button (ff_btn2_p1).
-	// Original: .in1({m_punch_p1, m_down1, m_up1, m_left1, m_right1}),
-	.in1({3'b00, m_punch_p1, m_down1, m_up1, m_left1, m_right1}),
-	// IN2: {punch, down, up, left, right} P2 active-high
-	.in2({3'b00, m_punch_p2, m_down2, m_up2, m_left2, m_right2}),
-	.dsw0(sw0),
+	.p1(p1_port),
+	.p2(p2_port),
+	.dsw(sw0),
+	.system(system_port),
 
-	.mcu_present(mcu_present),
+	.set_id(set_id),
 
 	.video_hsync(hs),
 	.video_vsync(vs),
@@ -490,46 +506,57 @@ Kangaroo kangaroo_inst
 	.ioctl_data(ioctl_dout),
 	.ioctl_wr(ioctl_wr),
 	.ioctl_index(ioctl_index),
+	.ioctl_download(ioctl_download),
 
-	.pause(pause_cpu),
-
-	.hs_address(hs_address),
-	.hs_data_in(hs_data_in),
-	.hs_data_out(hs_data_out),
-	.hs_write(hs_write_enable)
+	.pause(pause_cpu)
 );
 
-// HISCORE SYSTEM (HISCORE-2026-06-21) — mirrors Tutankham (Kangaroo's structural base), same hiscore.v v0014.
-// ioctl_din / ioctl_upload_req are now DRIVEN by the hiscore module (the old "disabled" assigns are removed).
-// Score access uses the work-RAM port B in Kangaroo_CPU.sv:208 (clk_10m). Config = MRA index 3, dump = index 4.
-wire [15:0] hs_address;
-wire [7:0]  hs_data_in;
-wire [7:0]  hs_data_out;
-wire        hs_write_enable;
-wire        hs_access_read;
-wire        hs_access_write;
-wire        hs_pause;
-wire        hs_configured;
 
-hiscore #(
-	.HS_ADDRESSWIDTH(16),
-	.CFG_ADDRESSWIDTH(3),
-	.CFG_LENGTHWIDTH(2)
-) hi (
-	.*,
-	.clk(CLK_10M),
-	.paused(pause_cpu),
-	.autosave(status[27]),
-	.ram_address(hs_address),
-	.data_from_ram(hs_data_out),
-	.data_to_ram(hs_data_in),
-	.data_from_hps(ioctl_dout),
-	.data_to_hps(ioctl_din),
-	.ram_write(hs_write_enable),
-	.ram_intent_read(hs_access_read),
-	.ram_intent_write(hs_access_write),
-	.pause_cpu(hs_pause),
-	.configured(hs_configured)
-);
+// HISCORE SYSTEM — DISABLED 2026-07-30 for the champbas bring-up.
+//
+// The Kangaroo wiring fed this from work-RAM port B in ChampionBaseball_CPU.sv, which no longer
+// exists in the new chain. ChampionBaseball_MAIN reserves its main-RAM port B for the sprite
+// engine's attribute reads and does not yet expose a hiscore port, so `data_from_ram` would have
+// had no driver at all. Left instantiated-but-disconnected it could also assert pause_cpu and
+// stall the CPU for a hiscore access that can never complete.
+//
+// Re-enable once ChampionBaseball_MAIN exposes a RAM port for it AND a champbas hiscore.dat entry
+// exists (MRA index 3 = config, index 4 = dump — both already reserved in the ROM index map).
+// Original block preserved below verbatim; uncomment to restore.
+//
+// wire [15:0] hs_address;
+// wire [7:0]  hs_data_in;
+// wire [7:0]  hs_data_out;
+// wire        hs_write_enable;
+// wire        hs_access_read;
+// wire        hs_access_write;
+// wire        hs_pause;
+// wire        hs_configured;
+//
+// hiscore #(
+// 	.HS_ADDRESSWIDTH(16),
+// 	.CFG_ADDRESSWIDTH(3),
+// 	.CFG_LENGTHWIDTH(2)
+// ) hi (
+// 	.*,
+// 	.clk(CLK_49M),
+// 	.paused(pause_cpu),
+// 	.autosave(status[27]),
+// 	.ram_address(hs_address),
+// 	.data_from_ram(hs_data_out),
+// 	.data_to_ram(hs_data_in),
+// 	.data_from_hps(ioctl_dout),
+// 	.data_to_hps(ioctl_din),
+// 	.ram_write(hs_write_enable),
+// 	.ram_intent_read(hs_access_read),
+// 	.ram_intent_write(hs_access_write),
+// 	.pause_cpu(hs_pause),
+// 	.configured(hs_configured)
+// );
+
+wire hs_pause      = 1'b0;
+wire hs_configured = 1'b0;
+assign ioctl_din       = 8'd0;
+assign ioctl_upload_req = 1'b0;
 
 endmodule

@@ -1,6 +1,6 @@
 //============================================================================
 //
-//  Kangaroo Sound Board (TVG-1-CPU-B, sound section)
+//  ChampionBaseball Sound Board (TVG-1-CPU-B, sound section)
 //  Based on MAME kangaroo.cpp
 //
 //  Sound memory map:
@@ -13,8 +13,16 @@
 //  IRQ: vblank (same as main CPU)
 //
 //============================================================================
+//============================================================================
+//  ChampionBaseball_SND.sv
+//
+//  NOTE (2026-07-30): This file has been RENAMED from the Kangaroo core but its
+//  CONTENTS ARE STILL KANGAROO'S. The Champion Baseball (champbas.cpp) memory map,
+//  video and sound hardware have NOT been implemented yet. See
+//  Claude/champbas_conversion_brief_2026-07-30.md for the target specification.
+//============================================================================
 
-module Kangaroo_SND
+module ChampionBaseball_SND
 (
     input         reset,
     input         clk_10m,           // 10 MHz master clock

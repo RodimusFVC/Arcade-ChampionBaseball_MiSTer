@@ -1,11 +1,19 @@
 //============================================================================
 //
-//  Kangaroo Main CPU Board (TVG-1-CPU-B)
+//  ChampionBaseball Main CPU Board (TVG-1-CPU-B)
 //  Based on MAME kangaroo.cpp by Ville Laitinen, Aaron Giles
 //
 //============================================================================
+//============================================================================
+//  ChampionBaseball_CPU.sv
+//
+//  NOTE (2026-07-30): This file has been RENAMED from the Kangaroo core but its
+//  CONTENTS ARE STILL KANGAROO'S. The Champion Baseball (champbas.cpp) memory map,
+//  video and sound hardware have NOT been implemented yet. See
+//  Claude/champbas_conversion_brief_2026-07-30.md for the target specification.
+//============================================================================
 
-module Kangaroo_CPU
+module ChampionBaseball_CPU
 (
     input         reset,
     input         clk_10m,           // 10 MHz master clock (matches real XTAL)

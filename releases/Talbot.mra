@@ -1,0 +1,84 @@
+<misterromdescription>
+    <name>Talbot</name>
+    <region>World</region>
+    <homebrew>no</homebrew>
+    <bootleg>no</bootleg>
+    <version></version>
+    <alternative></alternative>
+    <platform></platform>
+    <series>Talbot</series>
+    <year>1982</year>
+    <manufacturer>Alpha Denshi Co. (Volt Electronics license)</manufacturer>
+    <category>Maze</category>
+
+    <setname>talbot</setname>
+    <parent>talbot</parent>
+    <mameversion>0270</mameversion>
+    <rbf>ChampionBaseball</rbf>
+    <about></about>
+
+    <resolution>15kHz</resolution>
+    <rotation>vertical (cw)</rotation>
+    <flip>yes</flip>
+
+    <players>2 (alternating)</players>
+    <joystick>8-way</joystick>
+    <special_controls></special_controls>
+    <num_buttons>2</num_buttons>
+    <buttons names="Button 1,Button 2,Coin,Start 1P,Start 2P,Pause" default="A,B,Select,Start,R,L"/>
+
+    <!-- DIPs derived from MAME INPUT_PORTS(talbot), champbas.cpp:705. This is the base input port that
+         champbas/exctsccr both PORT_INCLUDE, so its DSW shape (Coinage/Lives/Rabbits/Cabinet + watchdog
+         readback in bit 7) is shared family-wide. ids are indexed by the RAW value of the bit range, not
+         MAME's PORT_DIPSETTING print order, so single-bit entries can list what looks like the "wrong"
+         label first (not the case here, but true for the champbas/exctsccr tables).
+         DSW bit 7 is deliberately absent: it is NOT a dip, it is watchdog_bit2() (champbas.cpp:487)
+         read back through this port, and must be driven by the core's watchdog counter.
+         Composite default = 0x03 (coinage 1C/1C) | 0x00 (lives 3) | 0x30 (rabbits 8) | 0x00 (cabinet
+         upright) = 0x33.
+         UNVERIFIED: polarities/default derived from source, not yet confirmed on the test screen. -->
+    <switches default="33">
+        <dip bits="0,1" name="Coinage" ids="Free Play,1C/3C,1C/2C,1C/1C"/>
+        <dip bits="2,3" name="Lives" ids="3,4,5,6"/>
+        <dip bits="4,5" name="Rabbits to Capture" ids="4,5,6,8"/>
+        <dip bits="6"   name="Cabinet" ids="Upright,Cocktail"/>
+    </switches>
+
+    <!-- Index 0: Main CPU ROMs (0x6000), six 4KB EPROMs, no audio CPU on this set -->
+    <rom index="0" md5="none" zip="talbot.zip">
+        <part crc="0368607d" name="11.10g"/>
+        <part crc="400e633b" name="12.11g"/>
+        <part crc="be575d9e" name="13.10h"/>
+        <part crc="56464614" name="14.11h"/>
+        <part crc="0225b7ef" name="15.10i"/>
+        <part crc="1612adf5" name="16.11i"/>
+    </rom>
+
+    <!-- Index 2: GFX (0x2000). talbot uses empty_init() — gfx1/gfx2 are NOT interleaved like the
+         champbas/exctsccr families, so this is a plain concatenation, chars then sprites:
+           0x0000-0x0FFF = chars   (gfx1, 7.6a)
+           0x1000-0x1FFF = sprites (gfx2, 8.6b) -->
+    <rom index="2" md5="none" zip="talbot.zip">
+        <part crc="bde14194" name="7.6a"/>
+        <part crc="ddcd227a" name="8.6b"/>
+    </rom>
+
+    <!-- Index 6: ALPHA-8201 MCU ROM (alpha_8201:mcu region, 0x2000). -->
+    <rom index="6" md5="none" zip="talbot.zip">
+        <part crc="b77931ac" name="alpha-8201_44801a75_2f25.bin"/>
+    </rom>
+
+    <!-- Index 7: PROMs (0x120).
+           0x000-0x01F = mb7051.7h, 32 x 8  palette
+           0x020-0x11F = mb7052.5e, 256 x 8 pen->color lookup -->
+    <rom index="7" md5="none" zip="talbot.zip">
+        <part crc="7a153c60" name="mb7051.7h"/>
+        <part crc="a3189986" name="mb7052.5e"/>
+    </rom>
+
+    <!-- Index 5: game-select byte, plain enumeration (see Champion Base Ball.mra header for the full table). -->
+    <rom index="5"><part>07</part></rom>
+
+    <remark>Talbot (Alpha Denshi, Volt Electronics license) — champbas.cpp</remark>
+    <mratimestamp>20260730000000</mratimestamp>
+</misterromdescription>
