@@ -89,6 +89,20 @@ module ChampionBaseball_MAIN
     wire  [7:0] cpu_dout;
     wire        m1_n, mreq_n, iorq_n, rd_n, wr_n;
 
+    // Per-set additions at 0x6000-0x68FF (champbas itself has NOTHING here).
+    //   champbasj  (0x01) : 0x6000-0x63FF = ALPHA-8201 shared RAM  (:599)
+    //   champbasja (0x02) : 0x6000-0x63FF = RAM, plus a fake protection read
+    //                       at 0x6800-0x68FF                        (:603-608)
+    //   champbasjb (0x03) : 0x6000-0x63FF = plain RAM, no protection (:611-615)
+    // For champbasj the 8201 also processes that RAM, so plain RAM alone will
+    // not satisfy its protection — harmless, and it is what we have until the
+    // HMCS40 core exists.
+    wire set_has_extram = (set_id == 8'h01) || (set_id == 8'h02) || (set_id == 8'h03);
+    wire set_has_prot   = (set_id == 8'h02);
+
+    wire cs_extram = set_has_extram && (A[15:10] == 6'b0110_00);   // 6000-63FF
+    wire cs_prot   = set_has_prot   && (A[15:8]  == 8'h68);        // 6800-68FF
+
     wire cs_rom   = (A <  16'h6000);
     // 0x7000-0x7001 mirrored across 0x7000-0x7FFF (mirror mask 0x0FFE leaves A0 significant)
     wire cs_ay    = (A[15:12] == 4'h7);
@@ -233,6 +247,39 @@ module ChampionBaseball_MAIN
     wire [7:0] spr_pos_data = spriteram[spr_pos_addr];
 
     ////////////////////////////////////////////////////////////////////////
+    // Per-set extra RAM at 0x6000-0x63FF (1KB) — champbasj / ja / jb only.
+    ////////////////////////////////////////////////////////////////////////
+
+    wire [7:0] extram_dout;
+
+    dpram_dc #(.widthad_a(10), .width_a(8)) ext_ram
+    (
+        .clock_a(clk),
+        .address_a(A[9:0]),
+        .data_a(cpu_dout),
+        .wren_a(cen_cpu & mem_wr & cs_extram),
+        .q_a(extram_dout),
+
+        .clock_b(clk),
+        .address_b(10'd0),
+        .data_b(8'd0),
+        .wren_b(1'b0),
+        .q_b()
+    );
+
+    ////////////////////////////////////////////////////////////////////////
+    // champbasja fake protection (champbas.cpp:532-563).
+    //
+    // Not an MCU — a pure combinational function of the ADDRESS, which MAME
+    // documents outright:
+    //     bit 7        = offset bit 0
+    //     bits 4,3,0   = offset bit 6
+    // Everything else reads 0.
+    ////////////////////////////////////////////////////////////////////////
+
+    wire [7:0] prot_dout = (A[0] ? 8'h80 : 8'h00) | (A[6] ? 8'h19 : 8'h00);
+
+    ////////////////////////////////////////////////////////////////////////
     // Video
     ////////////////////////////////////////////////////////////////////////
 
@@ -286,7 +333,9 @@ module ChampionBaseball_MAIN
     reg [7:0] cpu_din;
 
     always_comb begin
-        if      (cs_rom)  cpu_din = rom_data;
+        if      (cs_rom)    cpu_din = rom_data;
+        else if (cs_prot)   cpu_din = prot_dout;      // champbasja, before cs_extram
+        else if (cs_extram) cpu_din = extram_dout;
         else if (cs_vram) cpu_din = vram_dout;
         else if (cs_ram)  cpu_din = ram_dout;
         else if (io_q0)   cpu_din = p1;
