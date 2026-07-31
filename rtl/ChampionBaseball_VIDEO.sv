@@ -220,7 +220,35 @@ module ChampionBaseball_VIDEO
 
     wire       prime         = (h_cnt >= 9'd376);
 
-    wire [4:0] fetch_col = tile_col + 5'd1;   // always one tile ahead
+    // FLIP-FETCH-FIX-2026-07-31 ----------------------------------------------
+    // The fetch FSM below MUST be sequenced by a monotonically ascending phase.
+    // It used to be sequenced by `fx` (= sx[2:0]); under flip_screen, sx counts
+    // DOWN, so fx ran 7->0 and the pipeline executed BACKWARDS — the fx=7
+    // promote fired before the fx=1..4 fetches that fill it, so every tile was
+    // drawn with a different tile's colour attribute and gfx bytes.
+    //
+    // That is the entire Exciting Soccer FG/BG fault (wrong colours, black
+    // pitch, doubled+displaced status line). It never showed on Champion
+    // Baseball because that game boots flip_screen=0 (maincpu.dasm writes $FF
+    // to $A003) while Exciting Soccer boots flip_screen=1 (writes $00 at
+    // $010C) — so this path had never once executed.
+    //
+    // `ph` always ascends. `fx` stays the within-tile PIXEL select, which
+    // SHOULD mirror under flip — that is the wanted internal-order mirror.
+    // With flip_screen=0: ph==fx, fetch_col==tile_col+1, prime_col==0, so
+    // champbas behaviour is bit-identical to before this fix.
+    wire [2:0] ph = h_cnt[2:0];
+
+    // The scan direction reverses under flip, so "one tile ahead" reverses too.
+    // ORIGINAL (correct only for flip_screen=0):
+    //   wire [4:0] fetch_col = tile_col + 5'd1;   // always one tile ahead
+    wire [4:0] fetch_col = flip_screen ? (tile_col - 5'd1) : (tile_col + 5'd1);
+
+    // The first tile displayed on a line is tile_col 31 when the scan mirrors,
+    // so the column-0 prime must prime column 31 instead.
+    // ORIGINAL: the prime window hard-coded 5'd0.
+    wire [4:0] prime_col = flip_screen ? 5'd31 : 5'd0;
+    // ------------------------------------------------------------------------
 
     reg  [7:0] code_nxt;
     reg  [4:0] color_nxt;
@@ -257,29 +285,49 @@ module ChampionBaseball_VIDEO
                 // ticks every line) rather than by fx, and promoted at the last possible
                 // tick for maximum freshness — same shape as Kyugo's lookahead window.
                 case (h_cnt)
-                    9'd376: vram_raddr <= {1'b0, tile_row_next, 5'd0};
+                    9'd376: vram_raddr <= {1'b0, tile_row_next, prime_col};
                     9'd377: begin
                         code_nxt   <= vram_rdata;
-                        vram_raddr <= {1'b1, tile_row_next, 5'd0};
+                        vram_raddr <= {1'b1, tile_row_next, prime_col};
                     end
+                    // PRIME-PLANE2-FIX-2026-07-31: the prime window fetched the
+                    // code, the attribute and both planes-0/1 gfx bytes, but
+                    // NEVER plane 2, and never promoted p2_*_lat. So the first
+                    // column displayed on every line (tile_col 31 under flip =
+                    // the DISPLAY BOTTOM row) reused a stale plane-2 nibble:
+                    // correct glyph shape, wrong pen bit 2. That is exactly the
+                    // "CREDIT 00 / 1ST GAME renders green instead of white"
+                    // fault — it was confined to that row because that row IS
+                    // the primed column. Mirrors the main path's fx=2/3/4 steps.
                     9'd378: begin
                         color_nxt  <= vram_rdata[4:0];
                         gfx_addr_r <= {1'b0, code_full, 1'b1, fy_next};
+                        gfx_p3_addr_r <= {1'b0, code_full[7:0], 1'b1, fy_next};
+                        p2_hi_nib  <= code_full[8];
                     end
                     9'd379: begin
                         byte_hi_nxt <= gfx_data;
+                        p2_hi_nxt   <= p2_hi_nib ? gfx_p3_data[7:4] : gfx_p3_data[3:0];
                         gfx_addr_r  <= {1'b0, code_full, 1'b0, fy_next};
+                        gfx_p3_addr_r <= {1'b0, code_full[7:0], 1'b0, fy_next};
+                        p2_lo_nib   <= code_full[8];
                     end
-                    9'd380: byte_lo_nxt <= gfx_data;
+                    9'd380: begin
+                        byte_lo_nxt <= gfx_data;
+                        p2_lo_nxt   <= p2_lo_nib ? gfx_p3_data[7:4] : gfx_p3_data[3:0];
+                    end
                     9'd383: begin
                         color_lat   <= color_nxt;
                         byte_lo_lat <= byte_lo_nxt;
                         byte_hi_lat <= byte_hi_nxt;
+                        p2_lo_lat   <= p2_lo_nxt;
+                        p2_hi_lat   <= p2_hi_nxt;
                     end
                     default: ;
                 endcase
             end else
-            case (fx)
+            // FLIP-FETCH-FIX-2026-07-31: was `case (fx)` — see the note above.
+            case (ph)
                 3'd0: vram_raddr <= {1'b0, tile_row, fetch_col};
                 3'd1: begin
                     code_nxt   <= vram_rdata;
@@ -397,7 +445,19 @@ module ChampionBaseball_VIDEO
     end
 
     // Target line for this render pass = the line about to be displayed.
-    wire [7:0] spr_line = (v_raw + 8'd1) ^ {8{flip_screen}};
+    // SPR-FLIP-FIX-2026-07-31: sprites must NOT follow flip_screen.
+    // MAME flips only the TILEMAP on this hardware — flip_screen_set() drives
+    // the tilemap manager, and neither champbas_draw_sprites (champbas.cpp:387)
+    // nor exctsccr_draw_sprites (:420) reads flip_screen at all: no sx/sy
+    // mirror, no flipx/flipy inversion. Mirroring the sprite source row here
+    // added a mirror the reference does not have, and per
+    // [[Global screen flip must XOR per-entity flip]] a source-row count-down
+    // supplies BOTH placement and internal order — hence "sprites upside down"
+    // on Exciting Soccer (flip_screen=1) while champbas (flip_screen=0) was
+    // unaffected. Removing the XOR is a no-op when flip_screen=0.
+    // ORIGINAL:
+    //   wire [7:0] spr_line = (v_raw + 8'd1) ^ {8{flip_screen}};
+    wire [7:0] spr_line = (v_raw + 8'd1);
 
     localparam [8:0] SPR_START = 9'd260;    // just inside hblank (H_VIS = 256)
 
@@ -424,6 +484,37 @@ module ChampionBaseball_VIDEO
     reg  [3:0] s_row;
     reg        s_active;
 
+    ////////////////////////////////////////////////////////////////////////
+    // SPR4BPP-TRANS-FIX-2026-07-31 — 4bpp sprite transparency is INDIRECT.
+    //
+    // MAME draws the 4bpp bank with transpen_mask(gfx, colour, 0x10)
+    // (champbas.cpp:460), i.e. a pixel is transparent where its LOOKED-UP
+    // colour is 0 — since exctsccr_palette :332 builds
+    //     ctabentry = (color_prom[0x100 + i] & 0x0f) | 0x10
+    // transparent means the LUT nibble is 0, which depends on the COLOUR as
+    // well as the pixel value. Our test was a plain `s_pix != 0`, so pixels
+    // that MAME drops were drawn in colour-index 0x10 — the black masks
+    // between the teams and around individual players.
+    //
+    // The LUT is BRAM whose single core-side port is busy every pixel doing
+    // the output lookup, so the transparency bit is precomputed here: snoop
+    // the 4bpp table (index 7, 0x120-0x21F) off the download stream into a
+    // 256-bit mask. Same approach as the palette PROM below. 256 FFs.
+    ////////////////////////////////////////////////////////////////////////
+
+    reg [255:0] lut4_opaque;
+
+    // LUT4-INDEX-FIX-2026-07-31: the table lives at 0x120-0x21F, so the mask
+    // index is (addr - 0x120), NOT addr[7:0] — 0x120 & 0xFF = 0x20, which
+    // rotated the whole mask by 32 entries and left the 4bpp team still boxed.
+    wire [8:0] lut4_off = ioctl_addr[8:0] - 9'h120;
+
+    always_ff @(posedge clk_dl) begin
+        if (ioctl_wr && ioctl_download && (ioctl_index == 8'd7)
+            && (ioctl_addr >= 25'h120) && (ioctl_addr < 25'h220))
+            lut4_opaque[lut4_off[7:0]] <= |ioctl_data[3:0];
+    end
+
     wire       s_bank = spr_slot[3];                 // 0 = first bank, 1 = 4bpp bank
     wire [2:0] s_num  = 3'd7 - spr_slot[2:0];        // MAME order: 7 first, 0 last
     wire       s_is4  = is_exctsccr & s_bank;
@@ -436,10 +527,49 @@ module ChampionBaseball_VIDEO
 
     wire [7:0] attr_src = s_is3 ? vram_rdata : spr_attr_data;
 
-    wire [7:0] s_top     = 8'd255 - s_y;
+    wire [7:0] s_top_raw = 8'd255 - s_y;
+
+    // SPR-Y-MIRROR-2026-07-31 — sprites DO need the flip on this axis, but as
+    // two SEPARATE mirrors so each can be tuned alone.
+    //
+    // History: this axis originally got both mirrors at once from
+    // `spr_line = (v_raw+1) ^ {8{flip_screen}}` (a "source-row count-down",
+    // which per [[Global screen flip must XOR per-entity flip]] supplies
+    // placement AND internal order in one expression). I removed it on
+    // 2026-07-31 because MAME's draw_sprites never reads flip_screen — but on
+    // hardware that made placement WORSE ("too high up") while orientation
+    // stayed wrong, i.e. placement genuinely needs a mirror. Restored here in
+    // the surgical form the note prescribes, so the next hardware read maps
+    // 1:1 onto a knob:
+    //   "wrong place, right way up" -> s_top_eff   (placement, origin-only)
+    //   "right place, inside out"   -> s_row XOR   (internal order)
+    // Both are no-ops at flip_screen=0, so champbas is untouched.
+    //
+    // Origin-only mirror: a 16-pixel-tall sprite at top T occupies T..T+15, so
+    // the mirrored top is 255-(T+15) = 240-T. This moves the sprite WITHOUT
+    // reversing its internal row order — that is the XOR's job below.
+    // SPR-Y-MIRROR REVERTED 2026-07-31 (HW): with SPR-X-MIRROR in place the
+    // sprites landed on the green band right-way-up (vertical axis CORRECT),
+    // but the two teams came out swapped left<->right and the trophy sign moved
+    // to the wrong side. Raw Y is the displayed HORIZONTAL here, so this mirror
+    // was the one producing that — sprites need the raw-X mirror ONLY.
+    // Kept as a named wire so it is one edit to re-enable if ever needed:
+    //   wire [7:0] s_top = flip_screen ? (8'd240 - s_top_raw) : s_top_raw;
+    wire [7:0] s_top     = s_top_raw;
     wire [7:0] s_dy      = spr_line - s_top;
     wire       s_on_line = (s_dy < 8'd16);
-    wire       s_flipx   = ~s_a0[0];
+    // SPR-X-MIRROR-2026-07-31 — internal-order half of the raw-X sprite mirror.
+    // MEASURED, not derived: comparing "FPGA - Soccer 2.png" against
+    // "MAME - Soccer 2.png", the title-screen players sit at 0.35-0.42 of frame
+    // height where MAME has them at 0.60-0.65 — a MIRROR (0.60->0.40), not a
+    // shift — and the trophy sign moves left->right. Raw X is the DISPLAYED
+    // VERTICAL under this rotation (established from the raw-frame comparison:
+    // MAME's raw puts the status strip on the right edge, which shows at the
+    // display top), so "sprites too high AND upside down" is a raw-X fault.
+    // The earlier s_top/s_row work mirrored raw Y = displayed HORIZONTAL, which
+    // is the trophy's left/right, not this.
+    // ORIGINAL: wire s_flipx = ~s_a0[0];
+    wire       s_flipx   = ~s_a0[0] ^ flip_screen;
     wire       s_flipy   = ~s_a0[1];
 
     //   champbas : code = (a0>>2 & 0x3f) | gfx_bank<<6      colour = a1&0x1f | palbank<<6
@@ -531,6 +661,12 @@ module ChampionBaseball_VIDEO
                         6'd4: s_a1 <= attr_src;
                         6'd5: begin
                             s_active <= s_on_line;
+                            // SPR-Y-MIRROR-2026-07-31: internal-order half of
+                            // the pair above — the attribute XOR, which mirrors
+                            // the rows WITHIN the sprite and nothing else.
+                            // ORIGINAL: s_row <= s_flipy ? (4'd15 - s_dy[3:0]) : s_dy[3:0];
+                            // SPR-Y-MIRROR REVERTED 2026-07-31 — see s_top note.
+                            // WAS: s_row <= (s_flipy ^ flip_screen) ? (4'd15 - s_dy[3:0]) : s_dy[3:0];
                             s_row    <= s_flipy ? (4'd15 - s_dy[3:0]) : s_dy[3:0];
                         end
                         default: ;
@@ -548,9 +684,25 @@ module ChampionBaseball_VIDEO
                         end
                         if (cph == 3'd2) s_byteB <= gfx3_data;
 
-                        if (cph >= 3'd3 && s_active && slot_used && s_pix != 4'd0) begin
+                        // SPR4BPP-TRANS-FIX-2026-07-31: the 3bpp/champbas banks
+                        // keep the direct `pixel != 0` test; only the 4bpp bank
+                        // uses the indirect LUT-nibble test. See lut4_opaque.
+                        // ORIGINAL: if (cph >= 3'd3 && s_active && slot_used && s_pix != 4'd0) begin
+                        if (cph >= 3'd3 && s_active && slot_used
+                            && (s_is4 ? lut4_opaque[s_pen] : (s_pix != 4'd0))) begin
                             lb_we    <= 1'b1;
-                            lb_waddr <= (s_x - 8'd16) + {4'd0, s_px};
+                            // SPR-X-MIRROR-2026-07-31 — placement half of the
+                            // raw-X mirror, in the ORIGIN-ONLY form the vault
+                            // note prescribes: mirror where the sprite LANDS
+                            // without reversing its internal pixel order (that
+                            // is s_flipx's job above). A 16-wide sprite at sx
+                            // spans sx..sx+15, so the mirrored origin is
+                            // 255-(sx+15) = 240-sx. Using `240 - (sx + s_px)`
+                            // instead would be the classic trap — it does BOTH
+                            // jobs and they cannot then be tuned apart.
+                            // ORIGINAL: lb_waddr <= (s_x - 8'd16) + {4'd0, s_px};
+                            lb_waddr <= (flip_screen ? (8'd240 - (s_x - 8'd16))
+                                                     : (s_x - 8'd16)) + {4'd0, s_px};
                             lb_wdata <= {1'b1, s_is4, s_pen};
                         end
                     end
@@ -602,9 +754,29 @@ module ChampionBaseball_VIDEO
 
     wire [7:0] lut_index = is_exctsccr ? pen_swapped : active_pen;
 
-    assign prom_addr = 10'h020 + {2'd0, lut_index};
+    // SPR4BPP-LUT-FIX-2026-07-31 — the 4bpp sprite bank uses a DIFFERENT table.
+    // exctsccr_palette (champbas.cpp:329-334) splits the pen space in two:
+    //   pens 0x000-0x0FF (chars + 3bpp sprites):
+    //       ctabentry = (color_prom[bitswap(i)] & 0x0f) | ((i & 0x80) >> 3)
+    //   pens 0x100-0x1FF (4bpp sprites, :330):
+    //       ctabentry = (color_prom[0x100 + i] & 0x0f) | 0x10
+    // The 4bpp path takes NO bitswap, indexes the SECOND 0x100-byte LUT
+    // (prom2.8r, region 0x120+ once the 0x20 palette PROM is skipped), and
+    // FORCES colour-index bit 4 to 1 rather than deriving it from pen[7].
+    // We were sending 4bpp pixels through the 3bpp path on all three counts,
+    // which is why one team rendered nearly black. `spr_is4` already rides the
+    // line buffer alongside the pen, so the bank is known per pixel.
+    wire pen_is4 = spr_opaque & spr_is4;
 
-    wire [4:0] color_index = is_exctsccr ? {active_pen[7], prom_data[3:0]}
+    // ORIGINAL: assign prom_addr = 10'h020 + {2'd0, lut_index};
+    assign prom_addr = pen_is4 ? (10'h120 + {2'd0, active_pen})
+                               : (10'h020 + {2'd0, lut_index});
+
+    // ORIGINAL:
+    //   wire [4:0] color_index = is_exctsccr ? {active_pen[7], prom_data[3:0]}
+    //                                        : {palette_bank,  prom_data[3:0]};
+    wire [4:0] color_index = pen_is4     ? {1'b1,          prom_data[3:0]}
+                           : is_exctsccr ? {active_pen[7], prom_data[3:0]}
                                          : {palette_bank,  prom_data[3:0]};
 
     ////////////////////////////////////////////////////////////////////////

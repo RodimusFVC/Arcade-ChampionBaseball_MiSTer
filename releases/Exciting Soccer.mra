@@ -25,7 +25,7 @@
     <joystick>8-way</joystick>
     <special_controls></special_controls>
     <num_buttons>2</num_buttons>
-    <buttons names="Kick,Chase,Coin,Start 1P,Start 2P,Pause" default="A,B,Select,Start,R,L"/>
+    <buttons names="Kick,Chase,Not Used,Coin,Start 1P,Start 2P,Pause" default="A,B,X,Select,Start,R,L"/>
 
     <!-- DIPs derived from MAME INPUT_PORTS(exctsccr), champbas.cpp:794 (PORT_INCLUDE(talbot) + overrides).
          exctscc2 and exctsccrb both reuse this same table (see their GAME() lines in champbas.cpp).

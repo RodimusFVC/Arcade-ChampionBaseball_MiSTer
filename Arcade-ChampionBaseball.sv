@@ -403,12 +403,49 @@ wire m_pause    = btn_pause     | joystick_0[10];
 //Service Mode
 wire m_service  = btn_service                  ;
 
+// CTRL-UPDOWN-2026-07-31 — Exciting Soccer family (set_id 0x08-0x0A) only.
+// User reports Exciting Soccer's up/down inverted. Exciting Soccer boots
+// flip_screen=1 (maincpu.dasm $010C writes $00 to $A003) where champbas boots
+// $FF, so the game's frame is 180 deg from champbas's and only these sets are
+// affected. Left/right are deliberately NOT swapped — the report was
+// specifically "upside down"; if left/right are ALSO reversed then it is a full
+// 180 deg and the same swap should be applied to m_left/m_right.
+//
+// CAVEAT: this observation was made on the build that still contained the
+// FLIP-FETCH-FIX and SPR-FLIP-FIX defects, i.e. while the display orientation
+// itself was known-broken. Re-test after this build; if the controls are
+// correct WITHOUT this, set ctrl_flip_ud to 1'b0 or delete the block.
+// PARKED 2026-07-31 (user: "hold off on fixing controls until the game is
+// working"). Every control observation so far has been taken while the sprite
+// orientation was still moving, so each reading measured a different renderer —
+// which is why up/down and left/right kept trading places. Forced to 0 = plain
+// MAME mapping, a known baseline, so controls stop being a moving variable.
+// Re-enable by restoring the set_id test once the rendering is final:
+//   wire ctrl_flip_ud = (set_id >= 8'h08) && (set_id <= 8'h0A);
+wire ctrl_flip_ud = 1'b0;
+
+wire m_up1_c   = ctrl_flip_ud ? m_down1 : m_up1;
+wire m_down1_c = ctrl_flip_ud ? m_up1   : m_down1;
+wire m_up2_c   = ctrl_flip_ud ? m_down2 : m_up2;
+wire m_down2_c = ctrl_flip_ud ? m_up2   : m_down2;
+
+// CTRL-LEFTRIGHT-2026-07-31: user confirmed up/down now correct but LEFT/RIGHT
+// reversed, which completes the picture — flip_screen=1 is a 180 deg transform,
+// so BOTH control axes invert, not just one. Same gate as the up/down swap.
+wire m_left1_c  = ctrl_flip_ud ? m_right1 : m_left1;
+wire m_right1_c = ctrl_flip_ud ? m_left1  : m_right1;
+wire m_left2_c  = ctrl_flip_ud ? m_right2 : m_left2;
+wire m_right2_c = ctrl_flip_ud ? m_left2  : m_right2;
+
 // MAME port assembly. All champbas inputs are IP_ACTIVE_LOW, so these invert.
 //   P1/P2 : b0 BUTTON1(throw)  b1 unused  b2 BUTTON3(changes)  b3 BUTTON2(steal)
 //           b4 UP  b5 LEFT  b6 RIGHT  b7 DOWN                    (champbas.cpp:711-714, 762-765)
 //   SYSTEM: b0 START1  b1 START2  b2 COIN1  b3 COIN2  b4-7 unknown   (:748-755)
-wire [7:0] p1_port     = ~{m_down1, m_right1, m_left1, m_up1, m_steal1, m_change1, 1'b0, m_throw1};
-wire [7:0] p2_port     = ~{m_down2, m_right2, m_left2, m_up2, m_steal2, m_change2, 1'b0, m_throw2};
+// ORIGINAL (pre CTRL-UPDOWN-2026-07-31, used m_up1/m_down1 directly):
+//   wire [7:0] p1_port = ~{m_down1, m_right1, m_left1, m_up1, m_steal1, m_change1, 1'b0, m_throw1};
+//   wire [7:0] p2_port = ~{m_down2, m_right2, m_left2, m_up2, m_steal2, m_change2, 1'b0, m_throw2};
+wire [7:0] p1_port     = ~{m_down1_c, m_right1_c, m_left1_c, m_up1_c, m_steal1, m_change1, 1'b0, m_throw1};
+wire [7:0] p2_port     = ~{m_down2_c, m_right2_c, m_left2_c, m_up2_c, m_steal2, m_change2, 1'b0, m_throw2};
 wire [7:0] system_port = ~{4'b0000, m_coin2, m_coin1, m_start2, m_start1};
 
 // PAUSE SYSTEM

@@ -105,15 +105,30 @@ module ChampionBaseball_MAIN
     // For champbasj the 8201 also processes that RAM, so plain RAM alone will
     // not satisfy its protection — harmless, and it is what we have until the
     // HMCS40 core exists.
-    wire set_has_extram = (set_id == 8'h01) || (set_id == 8'h02) || (set_id == 8'h03);
+    // EXCTSCCR-MAP-FIX-2026-07-31: the whole Exciting Soccer family derives from
+    // champbasj_map, so ALL of them get the 0x6000-0x63FF RAM — exctsccr_map
+    // (champbas.cpp:640) and exctsccrb_map (:649) both start `champbasj_map(map)`.
+    // ORIGINAL: wire set_has_extram = (set_id == 8'h01) || (set_id == 8'h02) || (set_id == 8'h03);
+    wire set_has_extram = (set_id == 8'h01) || (set_id == 8'h02) || (set_id == 8'h03)
+                       || ((set_id >= 8'h08) && (set_id <= 8'h0A));
     wire set_has_prot   = (set_id == 8'h02);
+
+    // exctsccr (0x08) and exctscc2 (0x09) use exctsccr_map, which ADDS
+    // `map(0x7c00,0x7fff).ram()` and UNMAPS the AY from the main CPU
+    // (`map(0x7000,0x7001).unmaprw()` — the audiocpu owns the AY on that board).
+    // exctsccrb (0x0A) uses exctsccrb_map, which does NEITHER: it keeps
+    // champbas's AY mirrored across the whole 0x7xxx page. Missing this 1KB is
+    // what made exctsccr's self-test report RAM ERROR 7CXX.
+    wire set_is_exctsccr_full = (set_id == 8'h08) || (set_id == 8'h09);
 
     wire cs_extram = set_has_extram && (A[15:10] == 6'b0110_00);   // 6000-63FF
     wire cs_prot   = set_has_prot   && (A[15:8]  == 8'h68);        // 6800-68FF
+    wire cs_ram7c  = set_is_exctsccr_full && (A[15:10] == 6'b0111_11);  // 7C00-7FFF
 
     wire cs_rom   = (A <  16'h6000);
     // 0x7000-0x7001 mirrored across 0x7000-0x7FFF (mirror mask 0x0FFE leaves A0 significant)
-    wire cs_ay    = (A[15:12] == 4'h7);
+    // ORIGINAL: wire cs_ay = (A[15:12] == 4'h7);
+    wire cs_ay    = (A[15:12] == 4'h7) && !set_is_exctsccr_full;
     wire cs_vram  = (A[15:11] == 5'b1000_0);          // 8000-87FF
     wire cs_ram   = (A[15:11] == 5'b1000_1);          // 8800-8FFF
     wire cs_io    = (A[15:8]  == 8'hA0);
@@ -286,6 +301,30 @@ module ChampionBaseball_MAIN
     );
 
     ////////////////////////////////////////////////////////////////////////
+    // EXCTSCCR-MAP-FIX-2026-07-31 — extra RAM at 0x7C00-0x7FFF (1KB).
+    // exctsccr_map only (champbas.cpp:644); NOT present on exctsccrb, where
+    // that page is the mirrored AY instead. Its absence is what produced the
+    // "RAM ERROR 7CXX" self-test failure on exctsccr/exctscc2.
+    ////////////////////////////////////////////////////////////////////////
+
+    wire [7:0] ram7c_dout;
+
+    dpram_dc #(.widthad_a(10), .width_a(8)) ram_7c
+    (
+        .clock_a(clk),
+        .address_a(A[9:0]),
+        .data_a(cpu_dout),
+        .wren_a(cen_cpu & mem_wr & cs_ram7c),
+        .q_a(ram7c_dout),
+
+        .clock_b(clk),
+        .address_b(10'd0),
+        .data_b(8'd0),
+        .wren_b(1'b0),
+        .q_b()
+    );
+
+    ////////////////////////////////////////////////////////////////////////
     // champbasja fake protection (champbas.cpp:532-563).
     //
     // Not an MCU — a pure combinational function of the ADDRESS, which MAME
@@ -361,6 +400,7 @@ module ChampionBaseball_MAIN
         if      (cs_rom)    cpu_din = rom_data;
         else if (cs_prot)   cpu_din = prot_dout;      // champbasja, before cs_extram
         else if (cs_extram) cpu_din = extram_dout;
+        else if (cs_ram7c)  cpu_din = ram7c_dout;    // EXCTSCCR-MAP-FIX-2026-07-31
         else if (cs_vram) cpu_din = vram_dout;
         else if (cs_ram)  cpu_din = ram_dout;
         else if (io_q0)   cpu_din = p1;
