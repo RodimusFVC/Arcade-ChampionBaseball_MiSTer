@@ -67,6 +67,10 @@ wire [13:0] gfx_p01_addr;
 wire  [7:0] gfx_p01_data;
 wire  [9:0] prom_addr;
 wire  [7:0] prom_data;
+wire [12:0] gfx_p3_addr;
+wire  [7:0] gfx_p3_data;
+wire [12:0] gfx3_addr;
+wire  [7:0] gfx3_data;
 
 champbas_rom rom
 (
@@ -87,11 +91,13 @@ champbas_rom rom
 
     .audiocpu_addr(audiocpu_addr), .audiocpu_data(audiocpu_data),
 
-    // Not yet consumed — ALPHA-8201 MCU, and the Exciting Soccer gfx
-    // plane-3 / 4bpp sprite regions. Tied off so the BRAMs still load.
-    .mcu_addr(13'd0),              .mcu_data(),
-    .gfx_p3_addr(13'd0),           .gfx_p3_data(),
-    .gfx3_addr(13'd0),             .gfx3_data()
+    // exctsccr plane-2 source (6_c5.bin verbatim); nibble split happens in VIDEO
+    .gfx_p3_addr(gfx_p3_addr),     .gfx_p3_data(gfx_p3_data),
+
+    .gfx3_addr(gfx3_addr),         .gfx3_data(gfx3_data),
+
+    // Not yet consumed — ALPHA-8201 MCU
+    .mcu_addr(13'd0),              .mcu_data()
 );
 
 //------------------------------------------------------- Main board ----------------------------------------------------------//
@@ -123,6 +129,11 @@ ChampionBaseball_MAIN main_board
     .gfx_data(gfx_p01_data),
     .prom_addr(prom_addr),
     .prom_data(prom_data),
+
+    .gfx_p3_addr(gfx_p3_addr),
+    .gfx_p3_data(gfx_p3_data),
+    .gfx3_addr(gfx3_addr),
+    .gfx3_data(gfx3_data),
 
     .ay_din(ay_din),
     .ay_addr_wr(ay_addr_wr),

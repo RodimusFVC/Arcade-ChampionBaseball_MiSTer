@@ -49,6 +49,14 @@ module ChampionBaseball_MAIN
     output        [9:0]  prom_addr,
     input         [7:0]  prom_data,
 
+    // gfx plane-2 source (champbas_rom index 8) — exctsccr family only
+    output       [12:0]  gfx_p3_addr,
+    input         [7:0]  gfx_p3_data,
+
+    // 4bpp sprite gfx (champbas_rom index 9) — exctsccr family only
+    output       [12:0]  gfx3_addr,
+    input         [7:0]  gfx3_data,
+
     // ---- AY-3-8910 (main board, main CPU writes it)
     output        [7:0]  ay_din,
     output               ay_addr_wr,
@@ -121,6 +129,8 @@ module ChampionBaseball_MAIN
 
     wire ls259_wr   = mem_wr & io_q0 & (A[5:3] == 3'b000);   // A000-A007
     wire spram_wr   = mem_wr & io_q1 & (A[5:4] == 2'b10);    // A060-A06F
+    // exctsccr adds a SECOND sprite position RAM at A040-A04F (champbas.cpp:645)
+    wire spram2_wr  = mem_wr & io_q1 & (A[5:4] == 2'b00);    // A040-A04F
     assign sound_latch_wr = mem_wr & io_q2;
     wire wdog_wr    = mem_wr & io_q3;
 
@@ -136,6 +146,9 @@ module ChampionBaseball_MAIN
     ////////////////////////////////////////////////////////////////////////
 
     localparam SET_CHAMPBB2J = 8'h05;                  // see any MRA's index-5 enumeration
+
+    // exctsccr family = 0x08 exctsccr, 0x09 exctscc2, 0x0A exctsccrb
+    wire is_exctsccr = (set_id >= 8'h08) && (set_id <= 8'h0A);
 
     wire ay_sel_inverted = (set_id == SET_CHAMPBB2J);
     wire ay_wr           = mem_wr & cs_ay;
@@ -211,8 +224,11 @@ module ChampionBaseball_MAIN
 
     reg [7:0] spriteram [0:15];
 
+    reg [7:0] spriteram2 [0:15];
+
     always_ff @(posedge clk) begin
-        if (cen_cpu && spram_wr) spriteram[A[3:0]] <= cpu_dout;
+        if (cen_cpu && spram_wr)  spriteram[A[3:0]]  <= cpu_dout;
+        if (cen_cpu && spram2_wr) spriteram2[A[3:0]] <= cpu_dout;
     end
 
     ////////////////////////////////////////////////////////////////////////
@@ -236,7 +252,7 @@ module ChampionBaseball_MAIN
         .q_a(ram_dout),
 
         .clock_b(clk),
-        .address_b({7'h7F, spr_attr_addr}),
+        .address_b({(is_exctsccr ? 7'h00 : 7'h7F), spr_attr_addr}),
         .data_b(8'd0),
         .wren_b(1'b0),
         .q_b(spr_attr_data)
@@ -244,7 +260,9 @@ module ChampionBaseball_MAIN
 
     // Sprite position RAM read port (combinational — it is a register array)
     wire [3:0] spr_pos_addr;
-    wire [7:0] spr_pos_data = spriteram[spr_pos_addr];
+    wire       spr_pos_bank;
+    wire [7:0] spr_pos_data = spr_pos_bank ? spriteram2[spr_pos_addr]
+                                           : spriteram[spr_pos_addr];
 
     ////////////////////////////////////////////////////////////////////////
     // Per-set extra RAM at 0x6000-0x63FF (1KB) — champbasj / ja / jb only.
@@ -300,12 +318,19 @@ module ChampionBaseball_MAIN
         .gfx_bank(gfx_bank),
         .palette_bank(palette_bank),
 
+        .is_exctsccr(is_exctsccr),
+
         .gfx_addr(gfx_addr),
         .gfx_data(gfx_data),
         .prom_addr(prom_addr),
         .prom_data(prom_data),
+        .gfx_p3_addr(gfx_p3_addr),
+        .gfx_p3_data(gfx_p3_data),
+        .gfx3_addr(gfx3_addr),
+        .gfx3_data(gfx3_data),
 
         .spr_pos_addr(spr_pos_addr),
+        .spr_pos_bank(spr_pos_bank),
         .spr_pos_data(spr_pos_data),
         .spr_attr_addr(spr_attr_addr),
         .spr_attr_data(spr_attr_data),
