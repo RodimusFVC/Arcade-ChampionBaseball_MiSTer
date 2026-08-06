@@ -62,7 +62,10 @@ module alpha8201 #(
     // debug/observability
     output wire [10:0] dbg_pc,
     output wire [9:0]  dbg_op,
-    output wire        dbg_illegal
+    output wire        dbg_illegal,
+    output wire [9:0]  dbg_mcu_ram_addr,
+    output wire        dbg_mcu_rd_en,
+    output wire        dbg_mcu_wr_en
 );
 
     // ------------------------------------------------------------------
@@ -152,6 +155,9 @@ module alpha8201 #(
     // ------------------------------------------------------------------
     wire [3:0] r0_out, r1_out, r2_out, r3_out;
     wire [15:0] d_out;
+    wire        mcu_d_we;   // WR-EVENT-FIX-2026-08-01: true D-write strobe
+    wire        mcu_r_we;   // WR-EVENT-FIX rev2: true R-write strobe
+    wire [2:0]  mcu_r_we_idx;
 
     // mcu_update_address() (alpha8201.cpp:357-361):
     //   m_mcu_address = (m_mcu_d<<8 & 0x300) | m_mcu_r[2]<<4 | m_mcu_r[3];
@@ -162,14 +168,15 @@ module alpha8201 #(
     wire mcu_rd_en = bus_dir && ~d_out[2];                  // mcu_data_r gate, alpha8201.cpp:368
     wire mcu_wr_en = bus_dir && (d_out[3:2] == 2'b11);      // mcu_writeram gate, alpha8201.cpp:353
 
+    assign dbg_mcu_ram_addr = mcu_ram_addr;
+    assign dbg_mcu_rd_en    = mcu_rd_en;
+    assign dbg_mcu_wr_en    = mcu_wr_en;
+
     reg [7:0] shared_ram [0:1023];
 
     // Z80 side — unconditional (alpha8201.cpp:418-428 comment: "going by
     // exctsccr, m_bus has no effect here").
     assign ext_dout = shared_ram[ext_addr];
-    always @(posedge clk) begin
-        if (ext_we) shared_ram[ext_addr] <= ext_din;
-    end
 
     // MCU side — read (mcu_data_r, alpha8201.cpp:364-376): R0 gets the
     // high nibble, R1 the low nibble ("if(offset==0) ret>>=4").
@@ -177,10 +184,64 @@ module alpha8201 #(
     wire [3:0] r0_in = mcu_rd_en ? mcu_ram_rd[7:4] : 4'h0;
     wire [3:0] r1_in = mcu_rd_en ? mcu_ram_rd[3:0] : 4'h0;
 
-    // MCU side — write (mcu_writeram, alpha8201.cpp:350-355): level-
-    // triggered, re-evaluated every clk while the enable holds (R0<<4|R1).
+    // MCU side — write (mcu_writeram, alpha8201.cpp:350-355).
+    //
+    // WR-EVENT-FIX-2026-08-01 — this was LEVEL-triggered and that is wrong.
+    // MAME calls mcu_writeram() from exactly TWO places:
+    //     :360  mcu_d_w()    — after mcu_update_address() relatches the address
+    //     :409  bus_dir_w()  — when the Z80 hands the bus over
+    // so a write happens ONCE per event, with a settled address. Level-
+    // triggering fired every clk while `bus_dir && d[3:2]==11` held, and
+    // because mcu_ram_addr is built from d_out/r2/r3 — which change as the MCU
+    // executes — it sprayed {R0,R1} across every address the ports transiently
+    // passed through, corrupting shared RAM. Symptom: Talbot boots, coins up,
+    // plays its tune, then locks the moment the protection routine starts
+    // driving the ports (HW, 2026-08-01).
+    //
+    // d_we is a true write strobe from the core (SED/RED/SEDD/REDD), not a
+    // value-change guess, so a same-value D rewrite still commits — matching
+    // MAME, where write_d fires on every write.
+    wire       bus_dir_edge = bus_dir & ~bus_dir_q;
+    reg        bus_dir_q;
+    always @(posedge clk) bus_dir_q <= bus_dir;
+
+    // WR-EVENT-FIX-2026-08-01 rev2 — mcu_writeram() has THREE trigger paths in
+    // MAME, not two. Both port writers funnel through mcu_update_address():
+    //     mcu_data_w()  (write_r<0..3>, alpha8201.cpp:378-384) -> update_address -> writeram
+    //     mcu_d_w()     (write_d,       :386-393)              -> update_address -> writeram
+    //     bus_dir_w()   (:403-409)                             -> writeram directly
+    // The MCU's natural sequence is R2/R3 (address) -> D (WR) -> R0/R1 (data),
+    // so the commit that actually lands the byte is usually the R WRITE. rev1 of
+    // this fix triggered on d_we|bus_dir only, dropped that trigger, and changed
+    // nothing on hardware (Talbot still locked).
+    // Only R0-R3 count: device_add_mconfig binds write_r<0..3> and nothing else.
+    wire mcu_r03_we    = mcu_r_we & (mcu_r_we_idx <= 3'd3);
+    wire mcu_wr_commit = mcu_wr_en & (mcu_d_we | mcu_r03_we | bus_dir_edge);
+
+    // ------------------------------------------------------------------
+    // SHARED-RAM-SINGLE-DRIVER-FIX-2026-08-01
+    //
+    // The Z80-side and MCU-side writes used to live in TWO SEPARATE always
+    // blocks both driving `shared_ram`. That is multiple drivers on one array:
+    // Verilator stays quiet only because this project's Makefile passes
+    // -Wno-MULTIDRIVEN, and Quartus compiled it without inferring a single
+    // shared memory — so the Z80 and the MCU were effectively writing into
+    // different storage and could never see each other's data.
+    //
+    // That made the whole handshake dead regardless of WHEN the MCU committed,
+    // which is why three successive write-trigger fixes (level -> d_we/bus_dir
+    // -> +r_we) produced ZERO behavioural change on both talbot and exctsccr.
+    //
+    // Both writers now live in ONE block. Z80 has priority, matching MAME where
+    // ext_ram_w is unconditional and the MCU's write is gated on m_bus.
+    // (This is the same defect class the vault records for Kangaroo's mb88xx.v:
+    // registers driven from more than one always block.)
+    // ------------------------------------------------------------------
     always @(posedge clk) begin
-        if (mcu_wr_en) shared_ram[mcu_ram_addr] <= {r0_out, r1_out};
+        if (ext_we)
+            shared_ram[ext_addr]     <= ext_din;
+        else if (mcu_wr_commit)
+            shared_ram[mcu_ram_addr] <= {r0_out, r1_out};
     end
 
     // R2/R3 reads and R4-R7/D reads are all unbound in
@@ -200,6 +261,40 @@ module alpha8201 #(
         .rom_data   (core_rom_data),
         .rom_ack    (core_rom_ack),
 
+        // UNBOUND-PORT-READBACK-FIX-2026-08-01 --------------------------------
+        // R2-R7 have NO read_r<> bind in device_add_mconfig, so they take MAME's
+        // UNBOUND devcb_read default. These were tied to 4'h0, and with the CMOS
+        // wired-AND in read_r (hmcs40.cpp: `return (inp & m_r[index]) & 0xf`)
+        // that forces every read of R2-R7 to 0 no matter what the latch holds —
+        // i.e. `LRA 4` followed by `LAR 4` cannot round-trip.
+        //
+        // That is invisible on the ALPHA-8201 (talbot / exctsccrb), which never
+        // touches R2-R7 — which is exactly why talbot passes its self-test. The
+        // ALPHA-8302 (exctsccr) DOES use R4/R5 as scratch: an opcode-word
+        // set-diff of the two firmwares shows 00C4/00C5 (LAR 4/5) and 02C4/02C5
+        // (LRA 4/5) present only in the 8302. With the reads stuck at 0 its
+        // routine computes garbage and never writes the >=8 answer the Z80 spins
+        // on at $0ECF -> "TESTING 6" hangs forever.
+        //
+        // 4'hF makes the wired-AND return the output latch, which is also what
+        // an unconnected CMOS pin driven by its own latch does on real silicon.
+        // Inferred from behaviour (MAME runs exctsccr correctly AND the 8302
+        // does LRA/LAR round-trips, so its unbound read cannot be returning 0);
+        // devcb.h is not staged here to confirm directly. #unverified
+        //
+        // R0/R1 are NOT changed: MAME binds read_r<0>/read_r<1> to mcu_data_r,
+        // which genuinely returns 0 when not reading (alpha8201.cpp:364-376), so
+        // r0_in/r1_in already match the reference exactly.
+        // ---------------------------------------------------------------------
+        // REVERTED 2026-08-02 — the 4'hF experiment above is DISPROVEN ON HW:
+        // it entirely broke Talbot (which previously booted and played) and did
+        // nothing for exctsccr. Talbot's 8201 therefore DOES read R2-R7 and
+        // REQUIRES them to read 0 — which means MAME's unbound devcb_read
+        // really does return 0, and the agent's original comment was right.
+        // My behavioural inference ("MAME must return all-ones or LRA/LAR
+        // round-trips would break") was WRONG: the 8302 evidently tolerates
+        // LAR 4/5 reading 0, so R4/R5 are not scratch registers after all.
+        // DO NOT retry this. Back to the correct 4'h0.
         .r0_in(r0_in), .r1_in(r1_in), .r2_in(4'h0), .r3_in(4'h0),
         .r4_in(4'h0),  .r5_in(4'h0),  .r6_in(4'h0),  .r7_in(4'h0),
         .r0_out(r0_out), .r1_out(r1_out), .r2_out(r2_out), .r3_out(r3_out),
@@ -207,6 +302,9 @@ module alpha8201 #(
 
         .d_in       (16'h0),          // read_d unbound (alpha8201.cpp:320-330 has no read_d<>() bind)
         .d_out      (d_out),
+        .d_we       (mcu_d_we),       // WR-EVENT-FIX-2026-08-01
+        .r_we       (mcu_r_we),       // WR-EVENT-FIX rev2
+        .r_we_idx   (mcu_r_we_idx),
 
         .int0_in    (mcu_start),      // pin 30 INT0 = GO (alpha8201.cpp:57)
         .int1_in    (1'b0),           // pin 31 INT1 = n.c. (alpha8201.cpp:58)

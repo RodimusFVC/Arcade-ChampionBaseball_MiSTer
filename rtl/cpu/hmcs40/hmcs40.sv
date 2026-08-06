@@ -81,12 +81,30 @@ module hmcs40 (
     input  wire [15:0] d_in,
     output wire [15:0] d_out,
 
+    // D-WRITE-STROBE-2026-08-01: one-cycle pulse whenever an instruction WRITES
+    // the D port (SED/RED/SEDD/REDD), asserted even if the value is unchanged.
+    // This is MAME's `m_write_d(...)` callback -> alpha_8201_device::mcu_d_w(),
+    // which is the ONLY thing that latches the MCU's shared-RAM address and
+    // commits its write. Without a real strobe the wrapper had to infer the
+    // event from a value CHANGE, which misses same-value rewrites — and the
+    // wrapper's actual behaviour was worse still: a LEVEL-triggered write that
+    // fired every clock while the enable held, scribbling {R0,R1} across every
+    // address the ports transiently passed through.
+    output wire         d_we,
+
+    // R-WRITE-STROBE-2026-08-01: one-cycle pulse when an instruction writes
+    // R0-R3. MAME binds write_r<0..3> to alpha_8201_device::mcu_data_w(), which
+    // calls mcu_update_address() -> mcu_writeram(). So an R0-R3 write is ALSO a
+    // shared-RAM commit trigger, not just a D write. r_we_idx says which port.
+    output wire         r_we,
+    output wire  [2:0]  r_we_idx,
+
     // INT0/INT1 pins (HMCS40_INPUT_LINE_INT0/1, hmcs40.cpp:573-603)
     input  wire         int0_in,
     input  wire         int1_in,
 
     // debug/observability (not part of the MAME model — added for the
-    // Verilator harness and for LED/audio-hijack style bring-up on HW)
+    // sim harness and for LED/audio-hijack style bring-up on HW)
     output wire [10:0] dbg_pc,
     output wire [9:0]  dbg_op,
     output wire         dbg_illegal,     // combinational, high the cycle an ILL opcode is dispatched
@@ -158,6 +176,9 @@ module hmcs40 (
 
     reg [3:0]  r_lat0, r_lat1, r_lat2, r_lat3, r_lat4, r_lat5, r_lat6, r_lat7; // hmcs40.h:181, m_r[]
     reg [15:0] d_lat;              // D-port output latch (hmcs40.h:182, m_d)
+    reg        d_we_r;             // D-WRITE-STROBE-2026-08-01 (1-cycle pulse)
+    reg        r_we_r;             // R-WRITE-STROBE-2026-08-01 (1-cycle pulse)
+    reg [2:0]  r_we_idx_r;
 
     reg        int0_q, int1_q;     // edge-detect regs for INT0/INT1 pins
     reg        eint_line;          // which pin caused the pending external IRQ (0/1)
@@ -177,6 +198,9 @@ module hmcs40 (
     assign r0_out = r_lat0; assign r1_out = r_lat1; assign r2_out = r_lat2; assign r3_out = r_lat3;
     assign r4_out = r_lat4; assign r5_out = r_lat5; assign r6_out = r_lat6; assign r7_out = r_lat7;
     assign d_out  = d_lat;
+    assign d_we    = d_we_r;   // D-WRITE-STROBE-2026-08-01
+    assign r_we    = r_we_r;   // R-WRITE-STROBE-2026-08-01
+    assign r_we_idx = r_we_idx_r;
 
     function automatic [3:0] read_r(input [2:0] idx);
         case (idx)
@@ -227,6 +251,16 @@ module hmcs40 (
     reg [10:0] fetch_pc;       // pc value used for THIS fetch (captured before increment) / interrupt return addr
     reg [10:0] pc_next_lfsr;   // LFSR-advanced pc, computed at fetch-issue time
     reg [10:0] pc_after_p;     // pc to restore once P's deferred write-back completes
+    reg        rom_data_ready; // rom_ack arrived but a qualifying `cen` hasn't yet — see
+                                // commit_fetch/commit_p below: rom_ack is a short pulse
+                                // from the bridge and can arrive well before the `cen`
+                                // that's actually allowed to consume it (this is what
+                                // keeps the machine-cycle rate pinned to `cen`, not to
+                                // however fast the ROM bridge happens to answer — a real
+                                // bug in an earlier version of this file: the FSM was
+                                // committing on rom_ack alone, so the whole core free-ran
+                                // at ROM-bridge speed instead of the intended ~cen rate;
+                                // caught by the Verilator harness, not by inspection).
 
     wire [10:0] pc_fixedup = lpu_pend[1] ? {pc_upper, pc[5:0]} : pc;
 
@@ -264,6 +298,7 @@ module hmcs40 (
     reg [4:0]  n_pc_upper;
     reg [3:0]  n_r_any; reg [2:0] n_r_any_idx; reg n_r_any_we;
     reg [15:0] n_d;
+    reg        n_d_we;             // D-WRITE-STROBE-2026-08-01
     reg        push_req;           // request a stack push this cycle (return addr = next_pc_w)
     reg        pop_req;            // request a stack pop this cycle
     reg        ram_we;
@@ -300,6 +335,7 @@ module hmcs40 (
             n_pc_upper = pc_upper;
             n_r_any_we = 1'b0; n_r_any_idx = 3'd0; n_r_any = 4'h0;
             n_d = d_lat;
+            n_d_we = 1'b0;    // D-WRITE-STROBE-2026-08-01
             push_req = 1'b0; pop_req = 1'b0;
             ram_we = 1'b0; ram_we_addr = 8'h0; ram_we_data = 4'h0;
             lpu_taken_now = 1'b0; cal_taken_now = 1'b0;
@@ -465,11 +501,13 @@ module hmcs40 (
                 I_RTNI:  pop_req = 1'b1; // ie<=1 handled via id_w==I_RTNI check in ie commit below
 
                 // -- input/output (hmcs40op.cpp:614-690) -----------------
-                I_SED:  n_d[y] = 1'b1;
-                I_RED:  n_d[y] = 1'b0;
+                // D-WRITE-STROBE-2026-08-01: these four are exactly MAME's
+                // write_d call sites for this device.
+                I_SED:  begin n_d[y] = 1'b1;         n_d_we = 1'b1; end
+                I_RED:  begin n_d[y] = 1'b0;         n_d_we = 1'b1; end
                 I_TD:   n_s = read_d(y);
-                I_SEDD: n_d[op_w[1:0]] = 1'b1;
-                I_REDD: n_d[op_w[1:0]] = 1'b0;
+                I_SEDD: begin n_d[op_w[1:0]] = 1'b1; n_d_we = 1'b1; end
+                I_REDD: begin n_d[op_w[1:0]] = 1'b0; n_d_we = 1'b1; end
                 I_LAR:  n_a = read_r(op_w[2:0]);
                 I_LBR:  n_b = read_r(op_w[2:0]);
                 I_LRA:  begin n_r_any_we = 1'b1; n_r_any_idx = op_w[2:0]; n_r_any = a; end
@@ -537,8 +575,8 @@ module hmcs40 (
     // organised as independent if/else-if priority chains per register
     // group so each signal has exactly one resolved value per edge.
     // ------------------------------------------------------------------
-    wire commit_fetch = (state == S_FETCH_WAIT) && rom_ack;
-    wire commit_p      = (state == S_P_WAIT) && rom_ack;
+    wire commit_fetch = (state == S_FETCH_WAIT) && (rom_ack || rom_data_ready) && cen;
+    wire commit_p      = (state == S_P_WAIT) && (rom_ack || rom_data_ready) && cen;
     wire commit_int    = (state == S_INT_ENTRY) && cen;
     wire commit_any_cycle = commit_fetch || commit_p || commit_int; // one prescaler tick each
 
@@ -561,6 +599,8 @@ module hmcs40 (
             r_lat0<=4'hF; r_lat1<=4'hF; r_lat2<=4'hF; r_lat3<=4'hF;
             r_lat4<=4'hF; r_lat5<=4'hF; r_lat6<=4'hF; r_lat7<=4'hF; // reset_io: m_polarity (CMOS=all 1s)
             d_lat <= 16'hFFFF;
+            d_we_r <= 1'b0;        // D-WRITE-STROBE-2026-08-01
+            r_we_r <= 1'b0; r_we_idx_r <= 3'd0;   // R-WRITE-STROBE-2026-08-01
             eint_line <= 1'b0;
             lpu_pend <= 2'b00;
             block_int <= 1'b0;
@@ -570,6 +610,7 @@ module hmcs40 (
             op_cur <= 10'h0;
             i_rev <= 4'h0;
             int0_q <= 1'b0; int1_q <= 1'b0;
+            rom_data_ready <= 1'b0;
         end else if (hlt_in) begin
             // hmcs40.cpp:656-661: internal clock stopped, nothing advances
             halted <= 1'b1;
@@ -578,6 +619,11 @@ module hmcs40 (
             halted <= 1'b0;
             int0_q <= int0_in;
             int1_q <= int1_in;
+            // D-WRITE-STROBE-2026-08-01: default-clear so the strobe is exactly
+            // one clk wide; the S_EXEC commit below re-asserts it when the
+            // retiring instruction actually wrote D.
+            d_we_r <= 1'b0;
+            r_we_r <= 1'b0;   // R-WRITE-STROBE-2026-08-01
 
             case (state)
                 S_RESET: state <= S_TOP;
@@ -605,13 +651,25 @@ module hmcs40 (
                 end
 
                 S_FETCH_REQ: begin
-                    rom_addr <= pc[11:0];
+                    // QUARTUS-FIX-2026-08-01: `pc[11:0]` selected bit 11 of an
+                    // 11-bit vector (pc is [10:0]) — Quartus error 10232. The
+                    // intent is a zero-extend into the 12-bit rom_addr, which is
+                    // 12 bits only to carry p_addr_w at S_P_WRITE below.
+                    rom_addr <= {1'b0, pc};
                     rom_req  <= 1'b1;
                     pc_next_lfsr <= increment_pc(pc);
                     state <= S_FETCH_WAIT;
                 end
 
-                S_FETCH_WAIT: if (rom_ack) begin
+                // rom_ack (from the ROM bridge) can arrive many `clk`
+                // cycles before the next `cen` — latch it (rom_data_ready)
+                // and only actually commit once a qualifying `cen` shows
+                // up, so the machine-cycle rate is set by `cen`, not by
+                // however fast the ROM bridge happens to answer.
+                S_FETCH_WAIT: begin
+                    if (rom_ack) rom_data_ready <= 1'b1;
+                    if ((rom_ack || rom_data_ready) && cen) begin
+                    rom_data_ready <= 1'b0;
                     op_cur <= rom_data[9:0];
                     i_rev  <= {rom_data[0], rom_data[1], rom_data[2], rom_data[3]};
                     rom_req <= 1'b0;
@@ -624,7 +682,11 @@ module hmcs40 (
                     a <= n_a; b <= n_b; x <= n_x; spx <= n_spx; y <= n_y; spy <= n_spy;
                     s <= n_s; c <= n_c;
                     pc_upper <= n_pc_upper;
-                    d_lat <= n_d;
+                    d_lat  <= n_d;
+                    d_we_r <= n_d_we;   // D-WRITE-STROBE-2026-08-01
+                    // R-WRITE-STROBE-2026-08-01
+                    r_we_r     <= n_r_any_we;
+                    r_we_idx_r <= n_r_any_idx;
                     if (n_r_any_we) begin
                         case (n_r_any_idx)
                             3'd0: r_lat0 <= n_r_any; 3'd1: r_lat1 <= n_r_any;
@@ -653,13 +715,19 @@ module hmcs40 (
                     end else begin
                         state <= S_TOP;
                     end
+                    end // (rom_ack || rom_data_ready) && cen
                 end
 
-                S_P_WAIT: if (rom_ack) begin
+                // Same rom_ack-vs-cen decoupling as S_FETCH_WAIT above.
+                S_P_WAIT: begin
+                    if (rom_ack) rom_data_ready <= 1'b1;
+                    if ((rom_ack || rom_data_ready) && cen) begin
+                    rom_data_ready <= 1'b0;
                     rom_req <= 1'b0;
                     a <= pa; b <= pb; r_lat2 <= pr2; r_lat3 <= pr3;
                     pc <= pc_after_p;
                     state <= S_TOP;
+                    end
                 end
 
                 default: state <= S_TOP;

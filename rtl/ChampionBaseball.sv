@@ -96,9 +96,13 @@ champbas_rom rom
 
     .gfx3_addr(gfx3_addr),         .gfx3_data(gfx3_data),
 
-    // Not yet consumed — ALPHA-8201 MCU
-    .mcu_addr(13'd0),              .mcu_data()
+    // MCU-INTEGRATE-2026-08-01: ALPHA-8201 program ROM, now consumed by the
+    // alpha8201 instance inside ChampionBaseball_MAIN.
+    .mcu_addr(mcu_addr),           .mcu_data(mcu_data)
 );
+
+wire [12:0] mcu_addr;
+wire  [7:0] mcu_data;
 
 //------------------------------------------------------- Main board ----------------------------------------------------------//
 
@@ -109,6 +113,10 @@ wire       sound_latch_wr;
 
 ChampionBaseball_MAIN main_board
 (
+    // MCU-INTEGRATE-2026-08-01
+    .mcu_addr(mcu_addr),
+    .mcu_data(mcu_data),
+
     .clk(clk_49m),
     .cen_cpu(cen_cpu),
     .cen_pix(cen_pix),

@@ -39,6 +39,11 @@ module ChampionBaseball_MAIN
 
     input         [7:0]  set_id,         // MRA index 5
 
+    // MCU-INTEGRATE-2026-08-01: ALPHA-8201 program ROM (MRA index 6), served by
+    // champbas_rom. Pin-compatible with that module's mcu_addr/mcu_data.
+    output       [12:0]  mcu_addr,
+    input         [7:0]  mcu_data,
+
     // ---- main CPU ROM (champbas_rom index 0)
     output       [14:0]  rom_addr,
     input         [7:0]  rom_data,
@@ -109,8 +114,20 @@ module ChampionBaseball_MAIN
     // champbasj_map, so ALL of them get the 0x6000-0x63FF RAM — exctsccr_map
     // (champbas.cpp:640) and exctsccrb_map (:649) both start `champbasj_map(map)`.
     // ORIGINAL: wire set_has_extram = (set_id == 8'h01) || (set_id == 8'h02) || (set_id == 8'h03);
+    // MCU-INTEGRATE-2026-08-01: talbot (0x07) also derives from champbasj_map and
+    // instantiates the ALPHA-8201 (champbas.cpp:938), so it needs this window too.
     wire set_has_extram = (set_id == 8'h01) || (set_id == 8'h02) || (set_id == 8'h03)
+                       || (set_id == 8'h07)
                        || ((set_id >= 8'h08) && (set_id <= 8'h0A));
+
+    // Sets where a REAL ALPHA-8201 drives the shared RAM:
+    //   champbasj 0x01 · talbot 0x07 · exctsccr 0x08 · exctscc2 0x09
+    // exctsccrb (0x0A) is DELIBERATELY EXCLUDED: the Kazutomi bootleg has the
+    // 8201 fitted but UNUSED, that set is currently working on plain RAM, and
+    // letting an MCU scribble on a window the game uses as scratch could only
+    // break it. Do not "complete" this list without a reason.
+    wire set_has_mcu    = (set_id == 8'h01) || (set_id == 8'h07)
+                       || (set_id == 8'h08) || (set_id == 8'h09);
     wire set_has_prot   = (set_id == 8'h02);
 
     // exctsccr (0x08) and exctscc2 (0x09) use exctsccr_map, which ADDS
@@ -247,6 +264,47 @@ module ChampionBaseball_MAIN
     end
 
     ////////////////////////////////////////////////////////////////////////
+    // DETEAR-2026-08-01 — sprite half of the frame snapshot.
+    //
+    // The video module snapshots tilemap RAM once per frame (see its DETEAR
+    // block). Everything else that is scanned out must be latched at the SAME
+    // instant, or sprites stay live while the background lags one frame and
+    // they visibly swim against the scrolling pitch.
+    //
+    // Three 16-byte sources: spriteram ($A060), spriteram2 ($A040), and the
+    // sprite ATTRIBUTE window in main RAM ($8FF0 for champbas, $8800 for
+    // exctsccr — champbas.cpp:399 / :451). The attribute window is shadowed off
+    // CPU WRITES rather than read back through main_ram's port B, which frees
+    // that port entirely and keeps the snapshot a pure register copy.
+    //
+    // To REVERT: drive spr_pos_data/spr_attr_data from the live arrays and
+    // main_ram q_b again, and ignore vsnap.
+    ////////////////////////////////////////////////////////////////////////
+
+    wire        vsnap;
+    wire [10:0] spr_attr_base = is_exctsccr ? 11'h000 : 11'h7F0;
+
+    reg [7:0] spriteram_s  [0:15];
+    reg [7:0] spriteram2_s [0:15];
+    reg [7:0] spr_attr_live[0:15];
+    reg [7:0] spr_attr_s   [0:15];
+
+    integer si;
+    always_ff @(posedge clk) begin
+        // live shadow of the main-RAM sprite attribute window
+        if (cen_cpu && mem_wr && cs_ram && (A[10:4] == spr_attr_base[10:4]))
+            spr_attr_live[A[3:0]] <= cpu_dout;
+
+        if (vsnap) begin
+            for (si = 0; si < 16; si = si + 1) begin
+                spriteram_s [si] <= spriteram [si];
+                spriteram2_s[si] <= spriteram2[si];
+                spr_attr_s  [si] <= spr_attr_live[si];
+            end
+        end
+    end
+
+    ////////////////////////////////////////////////////////////////////////
     // Main RAM — 8800-8FFF (2KB).
     //
     // Port B serves the sprite engine's attribute reads. champbas keeps sprite
@@ -266,18 +324,38 @@ module ChampionBaseball_MAIN
         .wren_a(cen_cpu & mem_wr & cs_ram),
         .q_a(ram_dout),
 
+        // DETEAR-2026-08-01: port B no longer serves the sprite attribute
+        // reads — those come from the snapshot array below. Left idle.
         .clock_b(clk),
-        .address_b({(is_exctsccr ? 7'h00 : 7'h7F), spr_attr_addr}),
+        .address_b(11'd0),
         .data_b(8'd0),
         .wren_b(1'b0),
-        .q_b(spr_attr_data)
+        .q_b()
     );
+
+    // DETEAR-2026-08-01: attributes now come from the frame snapshot.
+    // ORIGINAL: main_ram q_b, addressed {(is_exctsccr ? 7'h00 : 7'h7F), spr_attr_addr}
+    //
+    // LATENCY-FIX-2026-08-01: this MUST stay a REGISTERED read. It replaced a
+    // dpram_dc port-B read, whose q is registered — the sprite FSM issues
+    // spr_attr_addr on one cycle and consumes the data on the NEXT. A plain
+    // combinational array read (`assign spr_attr_data = spr_attr_s[addr];`)
+    // returns the entry for whatever address is on the bus in the CONSUMING
+    // cycle, so every sprite picked up a neighbouring slot's code/colour/flip —
+    // observed on hardware as "the ball is drawn as a player" in Champion
+    // Baseball. Swapping a BRAM for registers changes read latency; preserve it.
+    // (spr_pos_data below was ALREADY combinational and is unaffected.)
+    reg [7:0] spr_attr_data_r;
+    always_ff @(posedge clk) spr_attr_data_r <= spr_attr_s[spr_attr_addr];
+    assign spr_attr_data = spr_attr_data_r;
 
     // Sprite position RAM read port (combinational — it is a register array)
     wire [3:0] spr_pos_addr;
     wire       spr_pos_bank;
-    wire [7:0] spr_pos_data = spr_pos_bank ? spriteram2[spr_pos_addr]
-                                           : spriteram[spr_pos_addr];
+    // DETEAR-2026-08-01: read the SNAPSHOT copies, not the live arrays.
+    // ORIGINAL: spr_pos_bank ? spriteram2[spr_pos_addr] : spriteram[spr_pos_addr]
+    wire [7:0] spr_pos_data = spr_pos_bank ? spriteram2_s[spr_pos_addr]
+                                           : spriteram_s[spr_pos_addr];
 
     ////////////////////////////////////////////////////////////////////////
     // Per-set extra RAM at 0x6000-0x63FF (1KB) — champbasj / ja / jb only.
@@ -290,7 +368,7 @@ module ChampionBaseball_MAIN
         .clock_a(clk),
         .address_a(A[9:0]),
         .data_a(cpu_dout),
-        .wren_a(cen_cpu & mem_wr & cs_extram),
+        .wren_a(cen_cpu & mem_wr & cs_extram & ~set_has_mcu),
         .q_a(extram_dout),
 
         .clock_b(clk),
@@ -325,6 +403,42 @@ module ChampionBaseball_MAIN
     );
 
     ////////////////////////////////////////////////////////////////////////
+    // MCU-INTEGRATE-2026-08-01 — ALPHA-8201 (HD44801 / HMCS44).
+    //
+    // LS259 bit 6 -> mcu_start_w, bit 7 -> bus_dir_w (champbas.cpp:935-936).
+    // Shared RAM is the 0x6000-0x63FF window (:599); when the MCU is fitted it
+    // OWNS that RAM, so the plain ext_ram above is write-disabled and the read
+    // mux takes mcu_ext_dout instead.
+    //
+    // CEN_DIV=511 VERIFIED 2026-08-01: MAME clocks the device at
+    // XTAL(18'432'000)/6/8 = 384 kHz (champbas.cpp:938) and hmcs40.h:113
+    // (`execute_clocks_to_cycles`) divides by 4 -- "4 cycles per machine cycle"
+    // -> 96 kHz. 49.152 MHz / 96 kHz = 512, so 512-1 = 511.
+    ////////////////////////////////////////////////////////////////////////
+
+    wire [7:0] mcu_ext_dout;
+
+    alpha8201 #(.CEN_DIV(16'd511)) alpha_8201
+    (
+        .clk        (clk),
+        .reset      (reset),
+
+        .mcu_start  (mainlatch[6]),
+        .bus_dir    (mainlatch[7]),
+
+        .ext_addr   (A[9:0]),
+        .ext_din    (cpu_dout),
+        .ext_dout   (mcu_ext_dout),
+        .ext_we     (cen_cpu & mem_wr & cs_extram & set_has_mcu),
+
+        .mcu_addr   (mcu_addr),
+        .mcu_data   (mcu_data),
+
+        .dbg_pc(), .dbg_op(), .dbg_illegal(),
+        .dbg_mcu_ram_addr(), .dbg_mcu_rd_en(), .dbg_mcu_wr_en()
+    );
+
+    ////////////////////////////////////////////////////////////////////////
     // champbasja fake protection (champbas.cpp:532-563).
     //
     // Not an MCU — a pure combinational function of the ADDRESS, which MAME
@@ -354,6 +468,7 @@ module ChampionBaseball_MAIN
         .cpu_vram_dout(vram_dout),
 
         .flip_screen(flip_screen),
+        .vsnap(vsnap),                 // DETEAR-2026-08-01
         .gfx_bank(gfx_bank),
         .palette_bank(palette_bank),
 
@@ -399,7 +514,7 @@ module ChampionBaseball_MAIN
     always_comb begin
         if      (cs_rom)    cpu_din = rom_data;
         else if (cs_prot)   cpu_din = prot_dout;      // champbasja, before cs_extram
-        else if (cs_extram) cpu_din = extram_dout;
+        else if (cs_extram) cpu_din = set_has_mcu ? mcu_ext_dout : extram_dout;
         else if (cs_ram7c)  cpu_din = ram7c_dout;    // EXCTSCCR-MAP-FIX-2026-07-31
         else if (cs_vram) cpu_din = vram_dout;
         else if (cs_ram)  cpu_din = ram_dout;

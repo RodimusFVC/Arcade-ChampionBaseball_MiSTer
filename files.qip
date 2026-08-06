@@ -21,6 +21,16 @@ set_global_assignment -name VERILOG_FILE rtl/hiscore.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/mb88_sv/mb88_core.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/mb88_sv/mb88.sv
 
+# MCU-INTEGRATE-2026-08-01: ALPHA-8201 (HD44801 / HMCS44) for champbasj, talbot,
+# exctsccr and exctscc2. Instantiated in ChampionBaseball_MAIN.sv, gated on
+# set_has_mcu — exctsccrb is deliberately NOT in that list (8201 fitted but
+# unused, and that set already works on plain RAM).
+# To REVERT: comment these three out, tie MAIN's mcu_addr/mcu_data off in
+# rtl/ChampionBaseball.sv, and drop the alpha8201 instance from MAIN.
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/hmcs40/hmcs40_decoder.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/hmcs40/hmcs40.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/hmcs40/alpha8201.sv
+
 set_global_assignment -name VHDL_FILE rtl/ram_rom/dpram_dc.vhd
 set_global_assignment -name VHDL_FILE rtl/ram_rom/spram.vhd
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/ram_rom/rom_loader.sv

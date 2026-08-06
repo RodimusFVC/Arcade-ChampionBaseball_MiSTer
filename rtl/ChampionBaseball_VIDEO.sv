@@ -34,6 +34,14 @@ module ChampionBaseball_VIDEO
 
     // ---- control bits from the LS259 mainlatch (champbas.cpp:970-978)
     input               flip_screen,     // latch bit 3, ALREADY de-inverted by the caller
+
+    // DETEAR-2026-08-01: single-cycle snapshot pulse, late in vblank. MAIN uses
+    // it to latch its sprite position/attribute arrays at the SAME instant this
+    // module snapshots tilemap RAM, so every scanned-out source shares one
+    // frame of delay. If sprites stayed live while the tilemap lagged, they
+    // would visibly swim against the pitch while it scrolls — a worse artifact
+    // than the tear this removes.
+    output              vsnap,
     input               gfx_bank,        // latch bit 2
     input               palette_bank,    // latch bit 4
 
@@ -169,6 +177,62 @@ module ChampionBaseball_VIDEO
     wire  [7:0] vram_rdata;
     wire [10:0] vram_addr_mux;
 
+    ////////////////////////////////////////////////////////////////////////
+    // DETEAR-2026-08-01 — deliberate DEVIATION FROM HARDWARE (user request
+    // 2026-08-01: "I give zero shits about what the original hardware did").
+    //
+    // Measured 2026-08-01: 55.1% of this game's tilemap writes land during
+    // ACTIVE DISPLAY (42326 vs 34543 in blanking). The board has NO scroll
+    // register, so scrolling the pitch IS a 2KB tilemap rewrite, and a full
+    // redraw needs 4+ frames of our 7680-cycle vblank. The real PCB therefore
+    // tears exactly like this — removing it is a choice, not a bug fix.
+    //
+    // Scanout now reads a SNAPSHOT taken once per frame, so the CPU can scribble
+    // mid-frame all it likes without the seam appearing. The CPU still reads and
+    // writes the live RAM, so game logic is completely unaffected.
+    //
+    // Port arrangement is chosen so there is NO contention:
+    //   tile_ram    port A = CPU r/w      port B = copy engine READ only
+    //   tile_shadow port A = copy WRITE   port B = video + sprite-attr reads
+    // (Previously port B was shared between the tilemap fetch and the 3bpp
+    // sprite attribute reads; this removes that sharing entirely.)
+    //
+    // Cost: +2KB BRAM, an 11-bit counter and a 2-state FSM. The copy is 2048
+    // bytes into a 122880-clock vblank -- 1.7% of the window.
+    //
+    // To REVERT to hardware-accurate tearing: drive vram_rdata from tile_ram's
+    // q_b again (restore the single instance below) and tie vsnap low.
+    ////////////////////////////////////////////////////////////////////////
+
+    // Snapshot late in vblank (active starts at v_cnt 16) so the copy captures
+    // the game's vblank IRQ update rather than racing it. 4 lines = 12288 clk
+    // remain afterwards, ~6x what the 2048-byte copy needs.
+    wire       snap_trig = (v_cnt == 9'd12) && (h_cnt == 9'd0);
+    reg        snap_d;
+    always_ff @(posedge clk) snap_d <= snap_trig;
+    wire       snap_pulse = snap_trig & ~snap_d;
+    assign     vsnap = snap_pulse;
+
+    reg [11:0] cp_cnt;
+    reg        cp_run;
+    reg [10:0] cp_addr_d;
+    reg        cp_we_d;
+    wire [7:0] cp_data;
+
+    always_ff @(posedge clk) begin
+        if (snap_pulse) begin
+            cp_cnt <= 12'd0;
+            cp_run <= 1'b1;
+        end else if (cp_run) begin
+            if (cp_cnt == 12'd2047) cp_run <= 1'b0;
+            cp_cnt <= cp_cnt + 12'd1;
+        end
+        // dpram_dc q is registered: data for the address issued this cycle
+        // arrives next cycle, so the write address/enable trail by one.
+        cp_addr_d <= cp_cnt[10:0];
+        cp_we_d   <= cp_run;
+    end
+
     dpram_dc #(.widthad_a(11), .width_a(8)) tile_ram
     (
         .clock_a(clk),
@@ -176,6 +240,21 @@ module ChampionBaseball_VIDEO
         .data_a(cpu_vram_din),
         .wren_a(cpu_vram_we),
         .q_a(cpu_vram_dout),
+
+        .clock_b(clk),
+        .address_b(cp_cnt[10:0]),
+        .data_b(8'd0),
+        .wren_b(1'b0),
+        .q_b(cp_data)
+    );
+
+    dpram_dc #(.widthad_a(11), .width_a(8)) tile_shadow
+    (
+        .clock_a(clk),
+        .address_a(cp_addr_d),
+        .data_a(cp_data),
+        .wren_a(cp_we_d),
+        .q_a(),
 
         .clock_b(clk),
         .address_b(vram_addr_mux),
