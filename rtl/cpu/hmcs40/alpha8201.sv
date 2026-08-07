@@ -181,8 +181,14 @@ module alpha8201 #(
     // MCU side — read (mcu_data_r, alpha8201.cpp:364-376): R0 gets the
     // high nibble, R1 the low nibble ("if(offset==0) ret>>=4").
     wire [7:0] mcu_ram_rd = shared_ram[mcu_ram_addr];
-    wire [3:0] r0_in = mcu_rd_en ? mcu_ram_rd[7:4] : 4'h0;
-    wire [3:0] r1_in = mcu_rd_en ? mcu_ram_rd[3:0] : 4'h0;
+    // R-PORT-READBACK-FIX-2026-08-07 (part 2): MAME read_r() (hmcs40.cpp:387-396)
+    // returns (callback_result & output_latch) for CMOS parts. HD44801 is
+    // IS_CMOS (hmcs40.cpp:123), so m_polarity is truthy -> the AND branch.
+    // ORIGINAL:
+    // wire [3:0] r0_in = mcu_rd_en ? mcu_ram_rd[7:4] : 4'h0;
+    // wire [3:0] r1_in = mcu_rd_en ? mcu_ram_rd[3:0] : 4'h0;
+    wire [3:0] r0_in = (mcu_rd_en ? mcu_ram_rd[7:4] : 4'hF) & r0_out;
+    wire [3:0] r1_in = (mcu_rd_en ? mcu_ram_rd[3:0] : 4'hF) & r1_out;
 
     // MCU side — write (mcu_writeram, alpha8201.cpp:350-355).
     //
@@ -223,7 +229,7 @@ module alpha8201 #(
     //
     // The Z80-side and MCU-side writes used to live in TWO SEPARATE always
     // blocks both driving `shared_ram`. That is multiple drivers on one array:
-    // Verilator stays quiet only because this project's Makefile passes
+    // -- Verilator stays quiet only because this project's Makefile passes
     // -Wno-MULTIDRIVEN, and Quartus compiled it without inferring a single
     // shared memory — so the Z80 and the MCU were effectively writing into
     // different storage and could never see each other's data.
@@ -295,12 +301,25 @@ module alpha8201 #(
         // round-trips would break") was WRONG: the 8302 evidently tolerates
         // LAR 4/5 reading 0, so R4/R5 are not scratch registers after all.
         // DO NOT retry this. Back to the correct 4'h0.
-        .r0_in(r0_in), .r1_in(r1_in), .r2_in(4'h0), .r3_in(4'h0),
+        // R-PORT-READBACK-FIX-2026-08-07: R2/R3 were tied to 0. MAME read_r()
+        // (hmcs40.cpp:387-396) always combines the callback result with the
+        // OUTPUT LATCH m_r[index], and alpha8201.cpp:323-328 binds only
+        // read_r<0>/<1> — so R2/R3 read back their own output latch. R3 is the
+        // shared-RAM address low nibble AND the firmware's counter storage
+        // (LAR 3 -> AI 1 -> LRA 3); returning 0 froze it and hung TESTING 6.
+        // ORIGINAL: .r0_in(r0_in), .r1_in(r1_in), .r2_in(4'h0), .r3_in(4'h0),
+        .r0_in(r0_in), .r1_in(r1_in), .r2_in(r2_out), .r3_in(r3_out),
         .r4_in(4'h0),  .r5_in(4'h0),  .r6_in(4'h0),  .r7_in(4'h0),
         .r0_out(r0_out), .r1_out(r1_out), .r2_out(r2_out), .r3_out(r3_out),
         .r4_out(), .r5_out(), .r6_out(), .r7_out(),
 
-        .d_in       (16'h0),          // read_d unbound (alpha8201.cpp:320-330 has no read_d<>() bind)
+        // D-PORT-READBACK-FIX-2026-08-07: same bug as R2/R3. read_d IS unbound
+        // (alpha8201.cpp:329 binds write_d only), and the core already applies
+        // the CMOS wired-AND with the output latch (hmcs40.cpp:411-414,
+        // m_polarity=IS_CMOS). Feeding 0 forced every D read to 0; all-ones
+        // makes the AND return the latch, which is what MAME does.
+        // ORIGINAL: .d_in       (16'h0),
+        .d_in       (16'hFFFF),
         .d_out      (d_out),
         .d_we       (mcu_d_we),       // WR-EVENT-FIX-2026-08-01
         .r_we       (mcu_r_we),       // WR-EVENT-FIX rev2
