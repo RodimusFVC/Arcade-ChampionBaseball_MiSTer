@@ -1,17 +1,17 @@
 <misterromdescription>
-    <name>Exciting Soccer</name>
+    <name>Exciting Soccer (Bootleg)</name>
     <region>World</region>
     <homebrew>no</homebrew>
-    <bootleg>no</bootleg>
+    <bootleg>yes</bootleg>
     <version></version>
     <alternative></alternative>
     <platform></platform>
     <series>Exciting Soccer</series>
     <year>1983</year>
-    <manufacturer>Alpha Denshi Co.</manufacturer>
+    <manufacturer>bootleg (Kazutomi)</manufacturer>
     <category>Sports</category>
 
-    <setname>exctsccr</setname>
+    <setname>exctsccrb</setname>
     <parent>exctsccr</parent>
     <mameversion>0270</mameversion>
     <rbf>ChampionBaseball</rbf>
@@ -35,20 +35,22 @@
         <dip bits="5,6" name="Game Time" ids="2 Min.,1 Min.,4 Min.,3 Min."/>
     </switches>
 
+    <!-- Kazutomi bootleg: a conversion running on a modified Champion Baseball board. The original 
+         Exciting Soccer board's improved sound hardware is missing here, hence its own 
+         maincpu/audiocpu ROMs distinct from exctsccr's. -->
+
     <!-- Index 0: Main CPU ROMs (0x6000) -->
     <rom index="0" md5="none" zip="exctsccr.zip">
-        <part crc="aa68df66" name="1_g10.bin"/>
-        <part crc="2d8f8326" name="2_h10.bin"/>
-        <part crc="dce4a04d" name="3_j10.bin"/>
+        <part crc="997c6a82" name="es-1.e2"/>
+        <part crc="5c66e792" name="es-2.g2"/>
+        <part crc="e0d504c0" name="es-3.h2"/>
     </rom>
 
-    <!-- Index 1: Sound CPU ROMs (0x9000) -->
+    <!-- Index 1: Sound CPU ROMs (0x6000) -->
     <rom index="1" md5="none" zip="exctsccr.zip">
-        <part crc="3babbd6b" name="0_h6.bin"/>
-        <part crc="639998f5" name="9_f6.bin"/>
-        <part crc="88651ee1" name="8_d6.bin"/>
-        <part crc="6d51521e" name="7_c6.bin"/>
-        <part crc="20f2207e" name="1_a6.bin"/>
+        <part crc="99e87b78" name="es-a.k2"/>
+        <part crc="8b3db794" name="es-b.l2"/>
+        <part crc="7bed2f81" name="es-c.m2"/>
     </rom>
 
     <!-- Index 2: GFX planes 0/1 (0x4000) -->
@@ -59,9 +61,9 @@
         <part crc="35f4f8c9" name="5_b5.bin" offset="0x1000" length="0x1000"/>
     </rom>
 
-    <!-- Index 6: ALPHA-8201 MCU ROM (0x2000) -->
+    <!-- Index 6: ALPHA-8201 MCU ROM (0x2000). -->
     <rom index="6" md5="none" zip="exctsccr.zip">
-        <part crc="edabac6c" name="alpha-8302_44801b35.bin"/>
+        <part crc="b77931ac" name="alpha-8201_44801a75_2f25.bin"/>
     </rom>
 
     <!-- Index 7: PROMs (0x220) -->
@@ -78,8 +80,8 @@
 
     <!-- Index 9: gfx3, 4bpp sprites (0x2000) -->
     <rom index="9" md5="none" zip="exctsccr.zip">
-        <part crc="7f9cace2" name="2.5k"/>
-        <part crc="db2d9e0d" name="3.5l"/>
+        <part crc="7f9cace2" name="2_k5.bin"/>
+        <part crc="db2d9e0d" name="3_l5.bin"/>
     </rom>
 
     <!-- Index 5: game-select byte: 
@@ -87,8 +89,8 @@
            0x04 champbb2    0x05 champbb2j   0x06 tbasebal    0x07 talbot
            0x08 exctsccr    0x09 exctscc2    0x0A exctsccrb
     -->
-    <rom index="5"><part>08</part></rom>
+    <rom index="5"><part>0A</part></rom>
 
-    <remark>Exciting Soccer (Alpha Denshi)</remark>
+    <remark>Exciting Soccer (bootleg, Kazutomi)</remark>
     <mratimestamp>20260730000000</mratimestamp>
 </misterromdescription>

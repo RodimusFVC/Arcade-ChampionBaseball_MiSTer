@@ -27,16 +27,6 @@
     <num_buttons>3</num_buttons>
     <buttons names="Throw,Steal,Changes,Coin,Start 1P,Start 2P,Pause" default="A,B,X,Select,Start,R,L"/>
 
-    <!-- DIPs derived from MAME INPUT_PORTS(champbas), champbas.cpp:758 (PORT_INCLUDE(talbot) + overrides).
-         champbb2 uses this same INPUT_PORTS table (see GAME(champbb2,...,champbas,...) in champbas.cpp) —
-         block copied verbatim from Champion Base Ball.mra.
-         ids are indexed by the RAW value of the bit range, so single-bit entries list the value-0 label
-         FIRST — Flip Screen / Demo Sounds / Difficulty therefore read "backwards" vs MAME's print order
-         and are correct as written. bits="lo,hi" is an inclusive RANGE, not a list.
-         DSW bit 7 is deliberately absent: it is NOT a dip, it is watchdog_bit2() (champbas.cpp:487)
-         read back through this port, and must be driven by the core's watchdog counter.
-         Composite default = 0x02 (coinage) | 0x04 (flip off) | 0x20 (easy) = 0x26.
-         UNVERIFIED: polarities/default derived from source, not yet confirmed on the test screen. -->
     <switches default="26">
         <dip bits="0,1" name="Coinage" ids="A 1C/3C B 1C/6C,A 1C/2C B 1C/6C,A 1C/1C B 2C/1C,A 2C/1C B 3C/2C"/>
         <dip bits="2"   name="Flip Screen" ids="On,Off"/>
@@ -45,19 +35,8 @@
         <dip bits="5"   name="Difficulty" ids="Hard,Easy"/>
     </switches>
 
-    <!-- Index 0: Main CPU ROMs. champbas.cpp:23 documents "7800-7fff ROM (Champion Baseball 2 only)" —
-         champbb2_map() (champbas.cpp:618-622) adds map(0x7800,0x7fff).rom() on top of the base 0x6000
-         champbasj_map. epr5931 is loaded here per ROM_START in its documented CPU address order; see the
-         REPORT for a note that ChampionBaseball_CPU.sv's current ROM address decode (rom0..rom5, each a
-         4KB window over cpu_A[15:12]==0..5) has no destination past 0x5FFF and therefore cannot yet place
-         this ROM at its correct CPU address 0x7800 — flagged, not fixed here (RTL change, out of scope). -->
-    <!-- Index 0: Main CPU ROMs (0x8000).
-         champbb2 is the ONLY set in this driver with a non-contiguous maincpu region: ROM_START
-         (champbas.cpp:1319) loads epr5931 at 0x7800, NOT at 0x6000. champbb2_map() (:618) adds
-         map(0x7800,0x7fff).rom() on top of the base 0x6000 map, so 0x6000-0x77FF is a real hole.
-         The 0x1800 pad below keeps epr5931 at its true address 0x7800 — without it the ROM lands
-         at 0x6000 and every fetch into that range is silently wrong.
-         Fill is 00 to match MAME's default ROM_REGION erase (no ROMREGION_ERASEFF here). -->
+
+    <!-- Index 0: Main CPU ROMs (0x8000) - champbb2 is the ONLY set with a non-contiguous region -->
     <rom index="0" md5="none" zip="champbb2.zip">
         <part crc="528e3c78" name="epr5932"/>
         <part crc="17b6057e" name="epr5929"/>
@@ -66,19 +45,14 @@
         <part crc="0592434d" name="epr5931"/>
     </rom>
 
-    <!-- Index 1: Sound CPU ROMs (0x6000). Same content/CRCs as champbas's champbb.6/7/8. -->
+    <!-- Index 1: Sound CPU ROMs (0x6000) -->
     <rom index="1" md5="none" zip="champbb2.zip">
         <part crc="26ab3e16" name="epr5933"/>
         <part crc="7c01715f" name="epr5934"/>
         <part crc="3c911786" name="epr5935"/>
     </rom>
 
-    <!-- Index 2: GFX (0x4000), de-interleaved here so the core loader stays dumb.
-         Reproduces init_champbas() (champbas.cpp:1650), which swaps the upper half of gfx1 with the
-         lower half of gfx2 because chars and sprites are mixed across both ROMs.
-         Core splits this index on ioctl_addr[13]:
-           0x0000-0x1FFF = chars   (8x8, 2bpp, 16 bytes/tile, 512 tiles)
-           0x2000-0x3FFF = sprites (16x16, 2bpp, 64 bytes/sprite, 128 sprites) -->
+    <!-- Index 2: GFX (0x4000) -->
     <rom index="2" md5="none" zip="champbb2.zip">
         <part crc="c4a4df75" name="epr5936" offset="0x0000" length="0x1000"/>
         <part crc="5c80ec42" name="epr5937" offset="0x0000" length="0x1000"/>
@@ -86,23 +60,24 @@
         <part crc="5c80ec42" name="epr5937" offset="0x1000" length="0x1000"/>
     </rom>
 
-    <!-- Index 6: ALPHA-8201 MCU ROM (alpha_8201:mcu region, 0x2000). Board has an 8302 on it but only
-         the 8201 instructions are used (champbas.cpp:11-13, 1326). -->
+    <!-- Index 6: ALPHA-8201 MCU ROM (0x2000) -->
     <rom index="6" md5="none" zip="champbb2.zip">
         <part crc="edabac6c" name="alpha-8302_44801b35.bin"/>
     </rom>
 
-    <!-- Index 7: PROMs (0x120).
-           0x000-0x01F = pr5957, 32 x 8  palette
-           0x020-0x11F = pr5956, 256 x 8 pen->color lookup -->
+    <!-- Index 7: PROMs (0x120) -->
     <rom index="7" md5="none" zip="champbb2.zip">
         <part crc="f5ce825e" name="pr5957"/>
         <part crc="872dd450" name="pr5956"/>
     </rom>
 
-    <!-- Index 5: game-select byte, plain enumeration (see Champion Base Ball.mra header for the full table). -->
+    <!-- Index 5: game-select byte: 
+           0x00 champbas    0x01 champbasj   0x02 champbasja  0x03 champbasjb
+           0x04 champbb2    0x05 champbb2j   0x06 tbasebal    0x07 talbot
+           0x08 exctsccr    0x09 exctscc2    0x0A exctsccrb
+    -->
     <rom index="5"><part>04</part></rom>
 
-    <remark>Champion Base Ball Part-2 (Alpha Denshi, Sega license) — champbas.cpp</remark>
+    <remark>Champion Base Ball Part-2 (Alpha Denshi, Sega license)</remark>
     <mratimestamp>20260730000000</mratimestamp>
 </misterromdescription>
