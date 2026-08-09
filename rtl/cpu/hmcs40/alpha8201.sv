@@ -184,11 +184,31 @@ module alpha8201 #(
     // R-PORT-READBACK-FIX-2026-08-07 (part 2): MAME read_r() (hmcs40.cpp:387-396)
     // returns (callback_result & output_latch) for CMOS parts. HD44801 is
     // IS_CMOS (hmcs40.cpp:123), so m_polarity is truthy -> the AND branch.
-    // ORIGINAL:
+    // GATE-CLOSED-FIX-2026-08-08: the 08-07 fix correctly ADDED `& rN_out`, but it
+    // also changed the GATE-CLOSED fallback from 4'h0 to 4'hF, and that second
+    // change is wrong.
+    //
+    // In MAME the read_r callback IS mcu_data_r (alpha8201.cpp:364-376), and that
+    // function returns **0** when the gate is closed (`u8 ret = 0;`, only assigned
+    // inside `if (m_bus && ~m_mcu_d & 4)`). read_r then ANDs the callback result
+    // with the output latch (hmcs40.cpp:392-393), so MAME yields 0 & latch = 0.
+    // Ours yielded 4'hF & rN_out = rN_out — the MCU read its own output latch back
+    // instead of zero.
+    //
+    // ⚠️ Why this survived until now: it is INVISIBLE on exctsccr, which sets
+    // bus_dir=1 at $01B7 and leaves it, so the gate is open for the whole run.
+    // Talbot holds **bus_dir=0 from frame 50 to frame 300** (mainlatch 0x42/0x43),
+    // so every R0/R1 port read across that window took the wrong branch. Same
+    // silicon, same MCU image — a different usage path.
+    //
+    // ORIGINAL (pre-2026-08-07, missing the latch AND):
     // wire [3:0] r0_in = mcu_rd_en ? mcu_ram_rd[7:4] : 4'h0;
     // wire [3:0] r1_in = mcu_rd_en ? mcu_ram_rd[3:0] : 4'h0;
-    wire [3:0] r0_in = (mcu_rd_en ? mcu_ram_rd[7:4] : 4'hF) & r0_out;
-    wire [3:0] r1_in = (mcu_rd_en ? mcu_ram_rd[3:0] : 4'hF) & r1_out;
+    // ORIGINAL (2026-08-07, latch AND correct but fallback wrong):
+    // wire [3:0] r0_in = (mcu_rd_en ? mcu_ram_rd[7:4] : 4'hF) & r0_out;
+    // wire [3:0] r1_in = (mcu_rd_en ? mcu_ram_rd[3:0] : 4'hF) & r1_out;
+    wire [3:0] r0_in = (mcu_rd_en ? mcu_ram_rd[7:4] : 4'h0) & r0_out;
+    wire [3:0] r1_in = (mcu_rd_en ? mcu_ram_rd[3:0] : 4'h0) & r1_out;
 
     // MCU side — write (mcu_writeram, alpha8201.cpp:350-355).
     //
