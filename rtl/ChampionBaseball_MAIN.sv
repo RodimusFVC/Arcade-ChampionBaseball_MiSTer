@@ -116,7 +116,14 @@ module ChampionBaseball_MAIN
     // ORIGINAL: wire set_has_extram = (set_id == 8'h01) || (set_id == 8'h02) || (set_id == 8'h03);
     // MCU-INTEGRATE-2026-08-01: talbot (0x07) also derives from champbasj_map and
     // instantiates the ALPHA-8201 (champbas.cpp:938), so it needs this window too.
+    // CHAMPBB2-MAP-FIX-2026-08-08: champbb2 (0x04) and champbb2j (0x05) were missing
+    // from this list. champbb2_map (champbas.cpp:618) starts `champbasj_map(map)`,
+    // so they get the 0x6000-0x63FF shared-RAM window like every other J-family set.
+    // ORIGINAL: wire set_has_extram = (set_id == 8'h01) || (set_id == 8'h02) || (set_id == 8'h03)
+    //                              || (set_id == 8'h07)
+    //                              || ((set_id >= 8'h08) && (set_id <= 8'h0A));
     wire set_has_extram = (set_id == 8'h01) || (set_id == 8'h02) || (set_id == 8'h03)
+                       || (set_id == 8'h04) || (set_id == 8'h05)
                        || (set_id == 8'h07)
                        || ((set_id >= 8'h08) && (set_id <= 8'h0A));
 
@@ -126,7 +133,19 @@ module ChampionBaseball_MAIN
     // 8201 fitted but UNUSED, that set is currently working on plain RAM, and
     // letting an MCU scribble on a window the game uses as scratch could only
     // break it. Do not "complete" this list without a reason.
-    wire set_has_mcu    = (set_id == 8'h01) || (set_id == 8'h07)
+    // CHAMPBB2-MCU-FIX-2026-08-08: champbb2 (0x04) / champbb2j (0x05) also carry a
+    // REAL ALPHA-8201 — champbb2(config) derives from champbasj(config)
+    // (champbas.cpp:1036) and ROM_START(champbb2) loads alpha-8302_44801b35.bin
+    // (:1327). That is the SAME MCU ROM (crc edabac6c) exctsccr already runs
+    // successfully, and the champbb2 MRA already loads it at index 6 — so this
+    // reuses an exercised path rather than opening a new one.
+    // ⚠️ If champbb2 now hangs in protection instead of erroring, back THIS line out
+    // first (one line, independent of the ROM/extram fixes) — plain RAM is the
+    // fallback and champbasj already lives with it.
+    // ORIGINAL: wire set_has_mcu = (set_id == 8'h01) || (set_id == 8'h07)
+    //                           || (set_id == 8'h08) || (set_id == 8'h09);
+    wire set_has_mcu    = (set_id == 8'h01) || (set_id == 8'h04) || (set_id == 8'h05)
+                       || (set_id == 8'h07)
                        || (set_id == 8'h08) || (set_id == 8'h09);
     wire set_has_prot   = (set_id == 8'h02);
 
@@ -142,10 +161,27 @@ module ChampionBaseball_MAIN
     wire cs_prot   = set_has_prot   && (A[15:8]  == 8'h68);        // 6800-68FF
     wire cs_ram7c  = set_is_exctsccr_full && (A[15:10] == 6'b0111_11);  // 7C00-7FFF
 
-    wire cs_rom   = (A <  16'h6000);
+    // CHAMPBB2-ROM7-FIX-2026-08-08 — the cause of the "ROM 7" self-test error.
+    //
+    // champbb2/champbb2j add a SECOND ROM window at 0x7800-0x7FFF
+    // (champbas.cpp:621, `map(0x7800,0x7fff).rom()`). It is the ONLY
+    // non-contiguous region in the whole driver: epr5931 loads at 0x7800, not at
+    // 0x6000 (:1319). The MRA is already correct — it pads 0x1800 to place the ROM
+    // there — so this was never a ROM-load problem. MAIN simply never decoded the
+    // window, so the self-test checksummed the read-mux default over it and
+    // reported ROM 7.
+    //
+    // 0x7800-0x7FFF must also win over cs_ay: in MAME the later `.rom()` entry
+    // covers that range, and champbb2's AY mirror is a WRITE map, so reads there
+    // are ROM. Excluding it from cs_ay keeps writes from double-decoding.
+    // ORIGINAL: wire cs_rom = (A < 16'h6000);
+    wire set_has_rom78 = (set_id == 8'h04) || (set_id == 8'h05);   // champbb2, champbb2j
+    wire cs_rom78 = set_has_rom78 && (A[15:11] == 5'b0111_1);      // 7800-7FFF
+    wire cs_rom   = (A <  16'h6000) || cs_rom78;
     // 0x7000-0x7001 mirrored across 0x7000-0x7FFF (mirror mask 0x0FFE leaves A0 significant)
     // ORIGINAL: wire cs_ay = (A[15:12] == 4'h7);
-    wire cs_ay    = (A[15:12] == 4'h7) && !set_is_exctsccr_full;
+    // ORIGINAL: wire cs_ay = (A[15:12] == 4'h7) && !set_is_exctsccr_full;
+    wire cs_ay    = (A[15:12] == 4'h7) && !set_is_exctsccr_full && !cs_rom78;
     wire cs_vram  = (A[15:11] == 5'b1000_0);          // 8000-87FF
     wire cs_ram   = (A[15:11] == 5'b1000_1);          // 8800-8FFF
     wire cs_io    = (A[15:8]  == 8'hA0);

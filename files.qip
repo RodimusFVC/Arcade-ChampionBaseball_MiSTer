@@ -4,6 +4,13 @@ set_global_assignment -name SYSTEMVERILOG_FILE Arcade-ChampionBaseball.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/ChampionBaseball.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/ChampionBaseball_CPU.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/ChampionBaseball_SND.sv
+# EXCTSCCR-SND-2026-08-08: separate sound board for exctsccr/exctscc2 (set_id
+# 0x08/0x09). Shares nothing with the champbas board — own crystal, 4 AYs on
+# Z80 I/O space, 2 DACs, NMI+IRQ. Instantiated alongside it in
+# rtl/ChampionBaseball.sv and selected by set_id.
+# To REVERT: remove this line, and drop the ExcitingSoccer_SND instance +
+# audiocpu_addr mux from rtl/ChampionBaseball.sv (restore .rom_addr(audiocpu_addr)).
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/ExcitingSoccer_SND.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/ChampionBaseball_VIDEO.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/ChampionBaseball_MAIN.sv
 

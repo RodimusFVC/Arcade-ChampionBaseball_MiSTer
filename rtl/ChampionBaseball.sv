@@ -168,14 +168,28 @@ ChampionBaseball_MAIN main_board
 
 //------------------------------------------------------- Sound board ---------------------------------------------------------//
 
+// EXCTSCCR-SND-2026-08-08: Exciting Soccer (0x08) and Exciting Soccer II (0x09)
+// have an ENTIRELY DIFFERENT sound board — own 14.318181 MHz crystal, 4 AYs on
+// Z80 I/O space, 2 DACs, NMI+IRQ. It is a separate module, not a variant of the
+// champbas board. exctsccrb (0x0A) is deliberately NOT included: that bootleg
+// runs champbas-family sound on a modified Champion Baseball board
+// (champbas.cpp:1146), so it stays on snd_board.
+wire use_exctsccr_snd = (set_id == 8'h08) || (set_id == 8'h09);
+
 wire signed [15:0] snd_mono;
+wire signed [15:0] snd_exctsccr;
+wire        [15:0] audiocpu_addr_cb;
+wire        [15:0] audiocpu_addr_es;
+
+// Only one board is selected at a time; both share the index-1 audio ROM port.
+assign audiocpu_addr = use_exctsccr_snd ? audiocpu_addr_es : audiocpu_addr_cb;
 
 ChampionBaseball_SND snd_board
 (
     .clk(clk_49m),
     .cen_cpu(cen_cpu),
     .cen_ay(cen_ay),
-    .reset(reset),
+    .reset(reset | use_exctsccr_snd),
     .pause(pause),
 
     .sound_latch(sound_latch),
@@ -187,14 +201,33 @@ ChampionBaseball_SND snd_board
     .ay_addr_wr(ay_addr_wr),
     .ay_data_wr(ay_data_wr),
 
-    .rom_addr(audiocpu_addr),
+    .rom_addr(audiocpu_addr_cb),
     .rom_data(audiocpu_data),
 
     .sound_out(snd_mono)
 );
 
-// champbas is mono (single SPEAKER, champbas.cpp:998)
-assign sound_l = snd_mono;
-assign sound_r = snd_mono;
+ExcitingSoccer_SND snd_board_es
+(
+    .clk(clk_49m),
+    .reset(reset | ~use_exctsccr_snd),
+    .pause(pause),
+
+    .is_exctscc2(set_id == 8'h09),
+
+    .sound_latch(sound_latch),
+    .sound_latch_wr(sound_latch_wr),
+
+    .rom_addr(audiocpu_addr_es),
+    .rom_data(audiocpu_data),
+
+    .sound_out(snd_exctsccr)
+);
+
+wire signed [15:0] snd_sel = use_exctsccr_snd ? snd_exctsccr : snd_mono;
+
+// Both boards are mono — one SPEAKER each (champbas.cpp:998, :1115)
+assign sound_l = snd_sel;
+assign sound_r = snd_sel;
 
 endmodule
