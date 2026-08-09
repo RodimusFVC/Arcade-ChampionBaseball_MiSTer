@@ -2,6 +2,7 @@
   <img src="Useful Information/Champion Baseball.png" width="800">
   <img src="Useful Information/Champion Baseball Part-2.png" width="800">
   <img src="Useful Information/Exciting Soccer.png" width="800">
+  <img src="Useful Information/Exciting Soccer II.png" width="800">
   <img src="Useful Information/Talbot.png" width="800">
 </p>
 
