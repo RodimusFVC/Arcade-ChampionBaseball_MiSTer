@@ -230,17 +230,19 @@ assign VIDEO_ARY = horz ? ((!ar) ? 12'd3 : 12'd0) : ((!ar) ? 12'd4 : 12'd0);
 `include "build_id.v"
 localparam CONF_STR = {
 	"CHAMPIONBASEBALL;;",
-	"ODE,Aspect Ratio,Original,Full screen,[ARC1],[ARC2];",
-	"OC,Orientation,Vert,Horz;",
-	"OB,Flip Vertical,Off,On;",
-	"OFH,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
+	"P1,Video Options;",
+	"P1ODE,Aspect Ratio,Original,Full screen,[ARC1],[ARC2];",
+	"P1OC,Orientation,Vert,Horz;",
+	"P1OB,HDMI Flip,Off,On;",
+	"P1OM,CRT Flip,Off,On;",
+	"P1OFH,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
 	"-;",
-	"P1,Pause Options;",
-	"P1OP,Pause when OSD is open,On,Off;",
-	"P1OQ,Dim video after 10s,On,Off;",
+	"P2,Pause Options;",
+	"P2OP,Pause when OSD is open,On,Off;",
+	"P2OQ,Dim video after 10s,On,Off;",
 	"-;",
-	"P2,High Score Options;",
-	"P2OR,Autosave Hiscores,Off,On;",
+	"P3,High Score Options;",
+	"P3OR,Autosave Hiscores,Off,On;",
 	"-;",
 	"DIP;",
 	"-;",
@@ -448,6 +450,17 @@ wire [7:0] p1_port     = ~{m_down1_c, m_right1_c, m_left1_c, m_up1_c, m_steal1, 
 wire [7:0] p2_port     = ~{m_down2_c, m_right2_c, m_left2_c, m_up2_c, m_steal2, m_change2, 1'b0, m_throw2};
 wire [7:0] system_port = ~{4'b0000, m_coin2, m_coin1, m_start2, m_start1};
 
+// HISCORE SYSTEM — re-enabled 2026-08-24. MAIN now exposes a RAM port (main_ram
+// port B was freed by DETEAR-2026-08-01) and the hiscore.dat entries are in the MRAs.
+wire [15:0] hs_address;
+wire  [7:0] hs_data_in;
+wire  [7:0] hs_data_out;
+wire        hs_write_enable;
+wire        hs_access_read;
+wire        hs_access_write;
+wire        hs_pause;
+wire        hs_configured;
+
 // PAUSE SYSTEM
 wire pause_cpu;
 wire [23:0] rgb_out;
@@ -545,55 +558,37 @@ ChampionBaseball championbaseball_inst
 	.ioctl_index(ioctl_index),
 	.ioctl_download(ioctl_download),
 
+	.hs_addr(hs_address),
+	.hs_din(hs_data_in),
+	.hs_dout(hs_data_out),
+	.hs_we(hs_write_enable),
+	.hs_active(hs_access_read | hs_access_write),
+
+	.crt_flip(status[22]),          // CRT Flip
+
 	.pause(pause_cpu)
 );
 
 
-// HISCORE SYSTEM — DISABLED 2026-07-30 for the champbas bring-up.
-//
-// The Kangaroo wiring fed this from work-RAM port B in ChampionBaseball_CPU.sv, which no longer
-// exists in the new chain. ChampionBaseball_MAIN reserves its main-RAM port B for the sprite
-// engine's attribute reads and does not yet expose a hiscore port, so `data_from_ram` would have
-// had no driver at all. Left instantiated-but-disconnected it could also assert pause_cpu and
-// stall the CPU for a hiscore access that can never complete.
-//
-// Re-enable once ChampionBaseball_MAIN exposes a RAM port for it AND a champbas hiscore.dat entry
-// exists (MRA index 3 = config, index 4 = dump — both already reserved in the ROM index map).
-// Original block preserved below verbatim; uncomment to restore.
-//
-// wire [15:0] hs_address;
-// wire [7:0]  hs_data_in;
-// wire [7:0]  hs_data_out;
-// wire        hs_write_enable;
-// wire        hs_access_read;
-// wire        hs_access_write;
-// wire        hs_pause;
-// wire        hs_configured;
-//
-// hiscore #(
-// 	.HS_ADDRESSWIDTH(16),
-// 	.CFG_ADDRESSWIDTH(3),
-// 	.CFG_LENGTHWIDTH(2)
-// ) hi (
-// 	.*,
-// 	.clk(CLK_49M),
-// 	.paused(pause_cpu),
-// 	.autosave(status[27]),
-// 	.ram_address(hs_address),
-// 	.data_from_ram(hs_data_out),
-// 	.data_to_ram(hs_data_in),
-// 	.data_from_hps(ioctl_dout),
-// 	.data_to_hps(ioctl_din),
-// 	.ram_write(hs_write_enable),
-// 	.ram_intent_read(hs_access_read),
-// 	.ram_intent_write(hs_access_write),
-// 	.pause_cpu(hs_pause),
-// 	.configured(hs_configured)
-// );
-
-wire hs_pause      = 1'b0;
-wire hs_configured = 1'b0;
-assign ioctl_din       = 8'd0;
-assign ioctl_upload_req = 1'b0;
+hiscore #(
+	.HS_ADDRESSWIDTH(16),
+	.CFG_ADDRESSWIDTH(3),
+	.CFG_LENGTHWIDTH(2)
+) hi (
+	.*,
+	.clk(CLK_49M),
+	.paused(pause_cpu),
+	.autosave(status[27]),
+	.ram_address(hs_address),
+	.data_from_ram(hs_data_out),
+	.data_to_ram(hs_data_in),
+	.data_from_hps(ioctl_dout),
+	.data_to_hps(ioctl_din),
+	.ram_write(hs_write_enable),
+	.ram_intent_read(hs_access_read),
+	.ram_intent_write(hs_access_write),
+	.pause_cpu(hs_pause),
+	.configured(hs_configured)
+);
 
 endmodule

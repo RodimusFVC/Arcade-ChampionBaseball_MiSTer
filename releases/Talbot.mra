@@ -68,6 +68,25 @@
     -->
     <rom index="5"><part>07</part></rom>
 
+
+    <!-- Index 3: hiscore config (hiscore.v v0014, CFG_LENGTHWIDTH=2).
+         Header: START_WAIT, CHECK_WAIT, CHECK_HOLD, WRITE_HOLD, REPEATCOUNT, REPEATWAIT, PAUSEPAD, CHANGEMASK
+         Entries [ADDR:4][LEN:2][START:1][END:1].
+         No MAME hiscore.dat entry exists for talbot; addresses located by hand.
+         The table is 6 x 8 bytes ("ALPHA" + 00 10 00) stamped from ROM $4015 by
+         the routine at $4001, and it lives in TILEMAP RAM (8000-87FF), not work RAM:
+             @:maincpu,program,87c0,30,41,00 -->
+    <rom index="3" md5="none">
+        <part>
+        00 00 FF FF 00 FF 00 02 00 02 00 01 11 11 00 00
+        00 00 87 C0 00 30 41 00
+        </part>
+    </rom>
+
+    <!-- Index 4: hiscore data. 0x30 = 48 bytes -->
+    <rom index="4"></rom>
+    <nvram index="4" size="48"></nvram>
+
     <remark>Talbot (Alpha Denshi, Volt Electronics license)</remark>
-    <mratimestamp>20260730000000</mratimestamp>
+    <mratimestamp>20260824000000</mratimestamp>
 </misterromdescription>

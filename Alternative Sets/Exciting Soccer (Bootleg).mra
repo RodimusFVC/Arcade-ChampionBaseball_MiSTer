@@ -91,6 +91,24 @@
     -->
     <rom index="5"><part>0A</part></rom>
 
+
+    <!-- Index 3: hiscore config (hiscore.v v0014, CFG_LENGTHWIDTH=2).
+         Header: START_WAIT, CHECK_WAIT, CHECK_HOLD, WRITE_HOLD, REPEATCOUNT, REPEATWAIT, PAUSEPAD, CHANGEMASK
+         Entries [ADDR:4][LEN:2][START:1][END:1], from MAME hiscore.dat (exctsccrb):
+             @:maincpu,program,8c90,30,4d,00
+             @:maincpu,program,8c60,3,02,00 -->
+    <rom index="3" md5="none">
+        <part>
+        00 00 FF FF 00 FF 00 02 00 02 00 01 11 11 00 00
+        00 00 8C 90 00 30 4D 00
+        00 00 8C 60 00 03 02 00
+        </part>
+    </rom>
+
+    <!-- Index 4: hiscore data. 0x30 + 0x03 = 51 bytes -->
+    <rom index="4"></rom>
+    <nvram index="4" size="51"></nvram>
+
     <remark>Exciting Soccer (bootleg, Kazutomi)</remark>
-    <mratimestamp>20260730000000</mratimestamp>
+    <mratimestamp>20260824000000</mratimestamp>
 </misterromdescription>

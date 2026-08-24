@@ -43,6 +43,15 @@ module ChampionBaseball
 
     output         [7:0] set_id,       // MRA index 5, exposed for the wrapper's OSD/rotation logic
 
+    // ---- hiscore RAM access (routed inside MAIN to main RAM or the 7C00 block)
+    input         [15:0] hs_addr,
+    input          [7:0] hs_din,
+    output         [7:0] hs_dout,
+    input                hs_we,
+    input                hs_active,
+
+    input                crt_flip,     // OSD CRT Flip — XORed into flip_screen in MAIN
+
     input                pause
 );
 
@@ -129,6 +138,14 @@ ChampionBaseball_MAIN main_board
     .system(system),
 
     .set_id(set_id),
+
+    .hs_addr(hs_addr),
+    .hs_din(hs_din),
+    .hs_dout(hs_dout),
+    .hs_we(hs_we),
+    .hs_active(hs_active),
+
+    .crt_flip(crt_flip),
 
     .rom_addr(maincpu_addr),
     .rom_data(maincpu_data),

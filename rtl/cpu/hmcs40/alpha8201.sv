@@ -39,6 +39,7 @@ module alpha8201 #(
     input  wire        reset,
 
     // Z80-side control (LS259 mainlatch, champbas.cpp:935-936)
+    input  wire        pause,         // 1 = freeze machine cycles (MiSTer pause; tie 0 in TBs)
     input  wire        mcu_start,     // Q6 -> alpha_8201_device::mcu_start_w (INT0 pin)
     input  wire        bus_dir,       // Q7 -> alpha_8201_device::bus_dir_w (1=MCU owns shared RAM)
 
@@ -76,6 +77,11 @@ module alpha8201 #(
     always @(posedge clk) begin
         if (reset) begin
             cen_cnt <= 16'd0;
+            cen <= 1'b0;
+        end else if (pause) begin
+            // Hold BOTH cen and the divider: the MCU is an interpreter over
+            // shared RAM, so letting it run while the Z80 is frozen lets it
+            // rewrite object data the CPU never re-primes.
             cen <= 1'b0;
         end else begin
             cen <= 1'b0;

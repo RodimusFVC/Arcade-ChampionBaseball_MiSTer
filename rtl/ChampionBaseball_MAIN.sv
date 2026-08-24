@@ -39,6 +39,17 @@ module ChampionBaseball_MAIN
 
     input         [7:0]  set_id,         // MRA index 5
 
+    // ---- hiscore RAM access. Two windows, because the hiscore.dat entries
+    // live in different memories per set: champbas/exctsccrb in main RAM
+    // (8800-8FFF), exctsccr/exctscc2 in the 7C00-7FFF block.
+    input        [15:0]  hs_addr,
+    input         [7:0]  hs_din,
+    output        [7:0]  hs_dout,
+    input                hs_we,
+    input                hs_active,      // ram_intent_read | ram_intent_write
+
+    input                crt_flip,       // OSD CRT Flip
+
     // MCU-INTEGRATE-2026-08-01: ALPHA-8201 program ROM (MRA index 6), served by
     // champbas_rom. Pin-compatible with that module's mcu_addr/mcu_data.
     output       [12:0]  mcu_addr,
@@ -251,7 +262,10 @@ module ChampionBaseball_MAIN
 
     wire irq_mask     = mainlatch[0];
     wire gfx_bank     = mainlatch[2];
-    wire flip_screen  = ~mainlatch[3];      // .invert() at :974 undone here
+    // ORIGINAL: wire flip_screen = ~mainlatch[3];
+    // CRT Flip XORs into the game's own cocktail flip -- the one signal the whole
+    // video path already keys off, so it reuses only paths that ship working.
+    wire flip_screen  = (~mainlatch[3]) ^ crt_flip;   // .invert() at :974 undone here
     wire palette_bank = mainlatch[4];
 
     ////////////////////////////////////////////////////////////////////////
@@ -379,6 +393,20 @@ module ChampionBaseball_MAIN
     wire [3:0] spr_attr_addr;
     wire [7:0] spr_attr_data;
 
+    // Hiscore RAM windows. Talbot's table lives in VRAM (champbas_map:580 maps
+    // 8000-87FF as vram) -- it is stamped there from ROM at $4001 and there is
+    // no work-RAM copy, so that window has to be reachable too.
+    wire hs_sel_ram   = (hs_addr[15:11] == 5'b1000_1);    // 8800-8FFF main RAM
+    wire hs_sel_ram7c = (hs_addr[15:10] == 6'b0111_11);   // 7C00-7FFF exctsccr
+    wire hs_sel_vram  = (hs_addr[15:11] == 5'b1000_0);    // 8000-87FF tilemap
+    wire [7:0] hs_ram_dout, hs_ram7c_dout;
+
+    // Every source is a REGISTERED memory read, so the select is delayed one
+    // clock to line up with the data it picks.
+    reg [1:0] hs_src_r;
+    always_ff @(posedge clk)
+        hs_src_r <= hs_sel_ram7c ? 2'd2 : hs_sel_vram ? 2'd1 : 2'd0;
+
     dpram_dc #(.widthad_a(11), .width_a(8)) main_ram
     (
         .clock_a(clk),
@@ -387,13 +415,13 @@ module ChampionBaseball_MAIN
         .wren_a(cen_cpu & mem_wr & cs_ram),
         .q_a(ram_dout),
 
-        // DETEAR-2026-08-01: port B no longer serves the sprite attribute
-        // reads — those come from the snapshot array below. Left idle.
+        // DETEAR-2026-08-01 freed port B from the sprite attribute reads
+        // (those come from the snapshot array below); hiscore uses it now.
         .clock_b(clk),
-        .address_b(11'd0),
-        .data_b(8'd0),
-        .wren_b(1'b0),
-        .q_b()
+        .address_b(hs_addr[10:0]),
+        .data_b(hs_din),
+        .wren_b(hs_we & hs_sel_ram),
+        .q_b(hs_ram_dout)
     );
 
     // DETEAR-2026-08-01: attributes now come from the frame snapshot.
@@ -459,10 +487,10 @@ module ChampionBaseball_MAIN
         .q_a(ram7c_dout),
 
         .clock_b(clk),
-        .address_b(10'd0),
-        .data_b(8'd0),
-        .wren_b(1'b0),
-        .q_b()
+        .address_b(hs_addr[9:0]),
+        .data_b(hs_din),
+        .wren_b(hs_we & hs_sel_ram7c),
+        .q_b(hs_ram7c_dout)
     );
 
     ////////////////////////////////////////////////////////////////////////
@@ -486,6 +514,7 @@ module ChampionBaseball_MAIN
         .clk        (clk),
         .reset      (reset_i),
 
+        .pause      (pause),
         .mcu_start  (mainlatch[6]),
         .bus_dir    (mainlatch[7]),
 
@@ -519,15 +548,28 @@ module ChampionBaseball_MAIN
 
     wire [7:0] vram_dout;
 
+    // VRAM has no spare port (port B drives the tilemap shadow copy), so the
+    // hiscore access borrows port A -- the CPU port. Safe because hiscore.v
+    // holds pause_cpu and waits on `paused` before it reads or writes.
+    wire        hs_vram_own   = hs_active & hs_sel_vram;
+    wire [10:0] vram_addr_cpu = hs_vram_own ? hs_addr[10:0] : A[10:0];
+    wire  [7:0] vram_din_cpu  = hs_vram_own ? hs_din        : cpu_dout;
+    wire        vram_we_cpu   = hs_vram_own ? hs_we
+                                            : (cen_cpu & mem_wr & cs_vram);
+
+    assign hs_dout = (hs_src_r == 2'd2) ? hs_ram7c_dout
+                   : (hs_src_r == 2'd1) ? vram_dout
+                                        : hs_ram_dout;
+
     ChampionBaseball_VIDEO video
     (
         .clk(clk),
         .cen_pix(cen_pix),
         .reset(reset),
 
-        .cpu_vram_addr(A[10:0]),
-        .cpu_vram_din(cpu_dout),
-        .cpu_vram_we(cen_cpu & mem_wr & cs_vram),
+        .cpu_vram_addr(vram_addr_cpu),
+        .cpu_vram_din(vram_din_cpu),
+        .cpu_vram_we(vram_we_cpu),
         .cpu_vram_dout(vram_dout),
 
         .flip_screen(flip_screen),

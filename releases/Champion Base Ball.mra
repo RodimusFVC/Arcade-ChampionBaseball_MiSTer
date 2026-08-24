@@ -70,6 +70,24 @@
     -->
     <rom index="5"><part>00</part></rom>
 
+
+    <!-- Index 3: hiscore config (hiscore.v v0014, CFG_LENGTHWIDTH=2).
+         Header: START_WAIT, CHECK_WAIT, CHECK_HOLD, WRITE_HOLD, REPEATCOUNT, REPEATWAIT, PAUSEPAD, CHANGEMASK
+         Entries [ADDR:4][LEN:2][START:1][END:1], from MAME hiscore.dat (champbas):
+             @:maincpu,program,8c30,2f,40,00
+             @:maincpu,program,8c5c,1,05,05 -->
+    <rom index="3" md5="none">
+        <part>
+        00 00 FF FF 00 FF 00 02 00 02 00 01 11 11 00 00
+        00 00 8C 30 00 2F 40 00
+        00 00 8C 5C 00 01 05 05
+        </part>
+    </rom>
+
+    <!-- Index 4: hiscore data. 0x2F + 0x01 = 48 bytes -->
+    <rom index="4"></rom>
+    <nvram index="4" size="48"></nvram>
+
     <remark>Champion Base Ball (Alpha Denshi, Sega license)</remark>
-    <mratimestamp>20260730000000</mratimestamp>
+    <mratimestamp>20260824000000</mratimestamp>
 </misterromdescription>
