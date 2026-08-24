@@ -130,6 +130,10 @@ module ChampionBaseball_MAIN
     wire cs_ram   = (A[15:11] == 5'b1000_1);          // 8800-8FFF
     wire cs_io    = (A[15:8]  == 8'hA0);
 
+    // CPU write strobe: dead while paused. T80 holds its bus frozen, so an
+    // ungated cen_cpu would re-fire the held write for the whole pause.
+    wire cen_cpu_wr = cen_cpu & ~pause;
+
     wire mem_rd = ~mreq_n & ~rd_n;
     wire mem_wr = ~mreq_n & ~wr_n;
 
@@ -173,7 +177,7 @@ module ChampionBaseball_MAIN
 
     always_ff @(posedge clk) begin
         if (reset_i) mainlatch <= 8'd0;
-        else if (cen_cpu && ls259_wr) mainlatch[A[2:0]] <= cpu_dout[0];
+        else if (cen_cpu_wr && ls259_wr) mainlatch[A[2:0]] <= cpu_dout[0];
     end
 
     wire irq_mask     = mainlatch[0];
@@ -231,8 +235,8 @@ module ChampionBaseball_MAIN
     reg [7:0] spriteram2 [0:15];
 
     always_ff @(posedge clk) begin
-        if (cen_cpu && spram_wr)  spriteram[A[3:0]]  <= cpu_dout;
-        if (cen_cpu && spram2_wr) spriteram2[A[3:0]] <= cpu_dout;
+        if (cen_cpu_wr && spram_wr)  spriteram[A[3:0]]  <= cpu_dout;
+        if (cen_cpu_wr && spram2_wr) spriteram2[A[3:0]] <= cpu_dout;
     end
 
     ////////////////////////////////////////////////////////////////////////
@@ -289,7 +293,7 @@ module ChampionBaseball_MAIN
         .clock_a(clk),
         .address_a(A[10:0]),
         .data_a(cpu_dout),
-        .wren_a(cen_cpu & mem_wr & cs_ram),
+        .wren_a(cen_cpu_wr & mem_wr & cs_ram),
         .q_a(ram_dout),
 
         .clock_b(clk),
@@ -322,7 +326,7 @@ module ChampionBaseball_MAIN
         .clock_a(clk),
         .address_a(A[9:0]),
         .data_a(cpu_dout),
-        .wren_a(cen_cpu & mem_wr & cs_extram & ~set_has_mcu),
+        .wren_a(cen_cpu_wr & mem_wr & cs_extram & ~set_has_mcu),
         .q_a(extram_dout),
 
         .clock_b(clk),
@@ -343,7 +347,7 @@ module ChampionBaseball_MAIN
         .clock_a(clk),
         .address_a(A[9:0]),
         .data_a(cpu_dout),
-        .wren_a(cen_cpu & mem_wr & cs_ram7c),
+        .wren_a(cen_cpu_wr & mem_wr & cs_ram7c),
         .q_a(ram7c_dout),
 
         .clock_b(clk),
@@ -373,7 +377,7 @@ module ChampionBaseball_MAIN
         .ext_addr   (A[9:0]),
         .ext_din    (cpu_dout),
         .ext_dout   (mcu_ext_dout),
-        .ext_we     (cen_cpu & mem_wr & cs_extram & set_has_mcu),
+        .ext_we     (cen_cpu_wr & mem_wr & cs_extram & set_has_mcu),
 
         .mcu_addr   (mcu_addr),
         .mcu_data   (mcu_data),
@@ -399,7 +403,7 @@ module ChampionBaseball_MAIN
     wire [10:0] vram_addr_cpu = hs_vram_own ? hs_addr[10:0] : A[10:0];
     wire  [7:0] vram_din_cpu  = hs_vram_own ? hs_din        : cpu_dout;
     wire        vram_we_cpu   = hs_vram_own ? hs_we
-                                            : (cen_cpu & mem_wr & cs_vram);
+                                            : (cen_cpu_wr & mem_wr & cs_vram);
 
     assign hs_dout = (hs_src_r == 2'd2) ? hs_ram7c_dout
                    : (hs_src_r == 2'd1) ? vram_dout

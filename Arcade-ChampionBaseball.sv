@@ -387,14 +387,20 @@ wire [7:0] p1_port     = ~{m_down1_c, m_right1_c, m_left1_c, m_up1_c, m_steal1, 
 wire [7:0] p2_port     = ~{m_down2_c, m_right2_c, m_left2_c, m_up2_c, m_steal2, m_change2, 1'b0, m_throw2};
 wire [7:0] system_port = ~{4'b0000, m_coin2, m_coin1, m_start2, m_start1};
 
-wire [15:0] hs_address;
-wire  [7:0] hs_data_in;
-wire  [7:0] hs_data_out;
-wire        hs_write_enable;
-wire        hs_access_read;
-wire        hs_access_write;
-wire        hs_pause;
-wire        hs_configured;
+// HISCORE DISABLED 2026-08-24 -- restore corrupts loaded data, cause not found.
+// Module tied off here AND index-3 commented out in every MRA. To re-enable:
+// restore the wire decls below, uncomment the hiscore instance further down,
+// and un-comment index 3 in the MRAs.
+wire [15:0] hs_address      = 16'd0;
+wire  [7:0] hs_data_in      = 8'd0;
+wire  [7:0] hs_data_out;                  // driven by the game module, harmless
+wire        hs_write_enable = 1'b0;
+wire        hs_access_read  = 1'b0;
+wire        hs_access_write = 1'b0;
+wire        hs_pause        = 1'b0;
+wire        hs_configured   = 1'b0;
+assign      ioctl_din       = 8'd0;
+assign      ioctl_upload_req = 1'b0;
 
 // PAUSE SYSTEM
 wire pause_cpu;
@@ -491,25 +497,25 @@ ChampionBaseball championbaseball_inst
 	.pause(pause_cpu)
 );
 
-hiscore #(
-	.HS_ADDRESSWIDTH(16),
-	.CFG_ADDRESSWIDTH(3),
-	.CFG_LENGTHWIDTH(2)
-) hi (
-	.*,
-	.clk(CLK_49M),
-	.paused(pause_cpu),
-	.autosave(status[27]),
-	.ram_address(hs_address),
-	.data_from_ram(hs_data_out),
-	.data_to_ram(hs_data_in),
-	.data_from_hps(ioctl_dout),
-	.data_to_hps(ioctl_din),
-	.ram_write(hs_write_enable),
-	.ram_intent_read(hs_access_read),
-	.ram_intent_write(hs_access_write),
-	.pause_cpu(hs_pause),
-	.configured(hs_configured)
-);
+// hiscore #(
+// 	.HS_ADDRESSWIDTH(16),
+// 	.CFG_ADDRESSWIDTH(3),
+// 	.CFG_LENGTHWIDTH(2)
+// ) hi (
+// 	.*,
+// 	.clk(CLK_49M),
+// 	.paused(pause_cpu),
+// 	.autosave(status[27]),
+// 	.ram_address(hs_address),
+// 	.data_from_ram(hs_data_out),
+// 	.data_to_ram(hs_data_in),
+// 	.data_from_hps(ioctl_dout),
+// 	.data_to_hps(ioctl_din),
+// 	.ram_write(hs_write_enable),
+// 	.ram_intent_read(hs_access_read),
+// 	.ram_intent_write(hs_access_write),
+// 	.pause_cpu(hs_pause),
+// 	.configured(hs_configured)
+// );
 
 endmodule
