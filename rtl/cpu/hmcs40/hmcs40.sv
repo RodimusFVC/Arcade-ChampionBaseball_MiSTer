@@ -692,7 +692,10 @@ module hmcs40 (
                             3'd0: r_lat0 <= n_r_any; 3'd1: r_lat1 <= n_r_any;
                             3'd2: r_lat2 <= n_r_any; 3'd3: r_lat3 <= n_r_any;
                             3'd4: r_lat4 <= n_r_any; 3'd5: r_lat5 <= n_r_any;
-                            3'd6: r_lat6 <= n_r_any; default: r_lat7 <= n_r_any;
+                            // HMCS44 (HD44801) has R0-R5 only; writes to R6/R7 are
+                            // ineffective and leave the latch at its reset 4'hF
+                            // (hmcs44_cpu_device::write_r, hmcs40.cpp:474-482).
+                            default: ;
                         endcase
                     end
                     if (ram_we) dram[ram_phys(ram_we_addr)] <= ram_we_data;

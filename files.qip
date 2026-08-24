@@ -2,14 +2,7 @@ set_global_assignment -name VHDL_INPUT_VERSION VHDL_2008
 
 set_global_assignment -name SYSTEMVERILOG_FILE Arcade-ChampionBaseball.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/ChampionBaseball.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/ChampionBaseball_CPU.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/ChampionBaseball_SND.sv
-# EXCTSCCR-SND-2026-08-08: separate sound board for exctsccr/exctscc2 (set_id
-# 0x08/0x09). Shares nothing with the champbas board — own crystal, 4 AYs on
-# Z80 I/O space, 2 DACs, NMI+IRQ. Instantiated alongside it in
-# rtl/ChampionBaseball.sv and selected by set_id.
-# To REVERT: remove this line, and drop the ExcitingSoccer_SND instance +
-# audiocpu_addr mux from rtl/ChampionBaseball.sv (restore .rom_addr(audiocpu_addr)).
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/ExcitingSoccer_SND.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/ChampionBaseball_VIDEO.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/ChampionBaseball_MAIN.sv
@@ -21,19 +14,7 @@ set_global_assignment -name VERILOG_FILE rtl/pause.v
 set_global_assignment -name VERILOG_FILE rtl/nvram.v
 set_global_assignment -name VERILOG_FILE rtl/hiscore.v
 
-# MB88-SV-SWAP-2026-07-10: replaced darfpga mb88.vhd (BRAM-RAM read-after-write hazard
-# hangs the K-debounce) with the validated combinational-RAM SV core + drop-in wrapper.
-# To REVERT: uncomment the VHDL line below, remove the two SYSTEMVERILOG_FILE lines.
-# set_global_assignment -name VHDL_FILE rtl/cpu/mb88.vhd
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/mb88_sv/mb88_core.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/mb88_sv/mb88.sv
 
-# MCU-INTEGRATE-2026-08-01: ALPHA-8201 (HD44801 / HMCS44) for champbasj, talbot,
-# exctsccr and exctscc2. Instantiated in ChampionBaseball_MAIN.sv, gated on
-# set_has_mcu — exctsccrb is deliberately NOT in that list (8201 fitted but
-# unused, and that set already works on plain RAM).
-# To REVERT: comment these three out, tie MAIN's mcu_addr/mcu_data off in
-# rtl/ChampionBaseball.sv, and drop the alpha8201 instance from MAIN.
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/hmcs40/hmcs40_decoder.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/hmcs40/hmcs40.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/hmcs40/alpha8201.sv

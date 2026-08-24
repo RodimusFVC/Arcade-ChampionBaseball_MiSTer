@@ -101,6 +101,7 @@ module ChampionBaseball_MAIN
     wire [15:0] A;
     wire  [7:0] cpu_dout;
     wire        m1_n, mreq_n, iorq_n, rd_n, wr_n;
+    wire        cpu_halt_n;   // DIAG-REVERT-2026-08-23: sim-only observability, output-only
 
     // Per-set additions at 0x6000-0x68FF (champbas itself has NOTHING here).
     //   champbasj  (0x01) : 0x6000-0x63FF = ALPHA-8201 shared RAM  (:599)
@@ -156,6 +157,10 @@ module ChampionBaseball_MAIN
     // champbas's AY mirrored across the whole 0x7xxx page. Missing this 1KB is
     // what made exctsccr's self-test report RAM ERROR 7CXX.
     wire set_is_exctsccr_full = (set_id == 8'h08) || (set_id == 8'h09);
+
+    // Only talbot's MCU security-checks the watchdog bit, and only talbot needs
+    // the watchdog RESET (see the watchdog block below).
+    wire set_is_talbot = (set_id == 8'h07);
 
     wire cs_extram = set_has_extram && (A[15:10] == 6'b0110_00);   // 6000-63FF
     wire cs_prot   = set_has_prot   && (A[15:8]  == 8'h68);        // 6800-68FF
@@ -240,7 +245,7 @@ module ChampionBaseball_MAIN
     reg [7:0] mainlatch = 8'd0;
 
     always_ff @(posedge clk) begin
-        if (reset) mainlatch <= 8'd0;
+        if (reset_i) mainlatch <= 8'd0;
         else if (cen_cpu && ls259_wr) mainlatch[A[2:0]] <= cpu_dout[0];
     end
 
@@ -274,13 +279,35 @@ module ChampionBaseball_MAIN
     // Measured: first $A080 read returned 0xA6 with wdog_cnt=1.
     always_ff @(posedge clk) begin
         vblank_d <= video_vblank;
-        if (reset)            wdog_cnt <= 5'd0;
+        if (reset_i)          wdog_cnt <= 5'd0;
         else if (wdog_wr)     wdog_cnt <= 5'd0;
-        else if (vblank_rise) wdog_cnt <= wdog_cnt + 5'd1;
+        // ~pause: video keeps running while paused, but the CPU cannot kick $A0C0,
+        // so an unfrozen counter would trip the watchdog reset after 16 vblanks.
+        else if (vblank_rise && !pause) wdog_cnt <= wdog_cnt + 5'd1;
     end
 
-    wire [4:0] wdog_diff = 5'h10 - wdog_cnt;
-    wire       wdog_bit2 = wdog_diff[2];
+    // 16 vblanks without an $A0C0 kick resets the CPU side (MAME:
+    // WATCHDOG_TIMER(...).set_vblank_count("screen", 0x10), champbas.cpp:941).
+    // Without it the boot spin at $003F ("jr c,$003F", a jump to itself) never
+    // ends, and wdog_cnt runs past 0x10 so the bit-2 readback stops matching MAME
+    // -- which is the bit Talbot's MCU security-checks against bit 2 of $8C00
+    // (champbas.cpp:63-65). Video timing is deliberately NOT reset: the real board's
+    // watchdog pulls CPU reset while the LS-counter video chain keeps running.
+    reg [3:0] wdog_rst_cnt = 4'd0;
+    always_ff @(posedge clk) begin
+        if (reset)                     wdog_rst_cnt <= 4'd0;
+        // ORIGINAL (all sets): else if (wdog_cnt == 5'h10) wdog_rst_cnt <= 4'hF;
+        else if (set_is_talbot && wdog_cnt == 5'h10) wdog_rst_cnt <= 4'hF;
+        else if (wdog_rst_cnt != 4'd0) wdog_rst_cnt <= wdog_rst_cnt - 4'd1;
+    end
+    wire reset_i = reset | (wdog_rst_cnt != 4'd0);
+
+    // wdog_cnt counts UP from a kick, so it is ALREADY MAME's (0x10 - counter):
+    // MAME's m_counter loads 0x10 and counts DOWN (watchdog.cpp:112 / :165).
+    // Subtracting a second time inverted the bit on 6 frames in 8.
+    // ORIGINAL: wire [4:0] wdog_diff = 5'h10 - wdog_cnt;
+    // ORIGINAL: wire       wdog_bit2 = wdog_diff[2];
+    wire       wdog_bit2 = wdog_cnt[2];
 
     wire [7:0] dsw_read = {wdog_bit2, dsw[6:0]};
 
@@ -457,7 +484,7 @@ module ChampionBaseball_MAIN
     alpha8201 #(.CEN_DIV(16'd511)) alpha_8201
     (
         .clk        (clk),
-        .reset      (reset),
+        .reset      (reset_i),
 
         .mcu_start  (mainlatch[6]),
         .bus_dir    (mainlatch[7]),
@@ -572,7 +599,7 @@ module ChampionBaseball_MAIN
     reg irq_pending = 1'b0;
 
     always_ff @(posedge clk) begin
-        if (reset)            irq_pending <= 1'b0;
+        if (reset_i)          irq_pending <= 1'b0;
         else if (!irq_mask)   irq_pending <= 1'b0;
         else if (vblank_rise) irq_pending <= 1'b1;
     end
@@ -588,13 +615,14 @@ module ChampionBaseball_MAIN
 
     T80s cpu
     (
-        .RESET_n(~reset),
+        .RESET_n(~reset_i),
         .CLK(clk),
         .CEN(cen_cpu & ~pause),
         .WAIT_n(1'b1),
         .INT_n(int_n),
         .NMI_n(1'b1),
         .BUSRQ_n(1'b1),
+        .HALT_n(cpu_halt_n),   // DIAG-REVERT-2026-08-23: was unconnected
         .M1_n(m1_n),
         .MREQ_n(mreq_n),
         .IORQ_n(iorq_n),

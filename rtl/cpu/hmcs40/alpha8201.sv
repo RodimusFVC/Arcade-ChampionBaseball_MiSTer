@@ -327,6 +327,9 @@ module alpha8201 #(
         // read_r<0>/<1> — so R2/R3 read back their own output latch. R3 is the
         // shared-RAM address low nibble AND the firmware's counter storage
         // (LAR 3 -> AI 1 -> LRA 3); returning 0 froze it and hung TESTING 6.
+        // R2/R3 readback is NOT the Talbot discriminator — tested both ways on HW:
+        // 4'h0 gave a RANDOM crash, the latch readback gives a DETERMINISTIC one.
+        // Neither works, and exctsccr/champbb2 need the readback. Do not revisit.
         // ORIGINAL: .r0_in(r0_in), .r1_in(r1_in), .r2_in(4'h0), .r3_in(4'h0),
         .r0_in(r0_in), .r1_in(r1_in), .r2_in(r2_out), .r3_in(r3_out),
         .r4_in(4'h0),  .r5_in(4'h0),  .r6_in(4'h0),  .r7_in(4'h0),
