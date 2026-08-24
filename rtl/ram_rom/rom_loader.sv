@@ -1,24 +1,15 @@
 //============================================================================
-//
 //  Kangaroo ROM loader
-//  ROM layout matched to MAME kangaroo.cpp
-//
 //============================================================================
 
 // ROM layout for Kangaroo:
-//
-// Index 0 — Main CPU program ROMs (24KB):
 //   0x0000 - 0x0FFF = tvg_75 (IC7)
 //   0x1000 - 0x1FFF = tvg_76 (IC8)
 //   0x2000 - 0x2FFF = tvg_77 (IC9)
 //   0x3000 - 0x3FFF = tvg_78 (IC10)
 //   0x4000 - 0x4FFF = tvg_79 (IC16)
 //   0x5000 - 0x5FFF = tvg_80 (IC17)
-//
-// Index 1 — Sound CPU program ROM (4KB):
 //   0x0000 - 0x0FFF = tvg_81 (IC24)
-//
-// Index 2 — Blitter GFX ROMs (16KB):
 //   0x0000 - 0x0FFF = tvg_83/v0 (IC76)
 //   0x1000 - 0x1FFF = tvg_85/v2 (IC77)
 //   0x2000 - 0x2FFF = tvg_84/v1 (IC52)
@@ -62,7 +53,6 @@ endmodule
 // EPROMS //
 ////////////
 
-// Generic 4KB ROM module (12-bit address)
 module eprom_4k
 (
     input  logic        CLK,

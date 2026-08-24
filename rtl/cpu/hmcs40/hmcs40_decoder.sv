@@ -1,22 +1,5 @@
 //============================================================================
-//
 //  hmcs40_decoder — standalone combinational HMCS40 opcode decoder.
-//
-//  Split out from hmcs40.sv into its own module for exactly one reason:
-//  it lets the Verilator harness (verilator/hmcs40/) instantiate THIS
-//  module directly and mechanically sweep all 1024 possible 10-bit
-//  opcodes against the golden table exported by hmcs40_coverage.py,
-//  proving the RTL decoder actually used inside hmcs40.sv — not a
-//  hand-copy of it — matches MAME's decode bit-for-bit. See
-//  rtl/cpu/hmcs40/README.md "Opcode coverage proof".
-//
-//  Transcribed verbatim from hmcs40.cpp:686-793 (three-level switch: top
-//  6 bits [9:4], then top 8 bits [9:2], then full 10 bits). Instruction
-//  IDs match hmcs40.sv's localparams exactly (I_ILL=0, then the 84
-//  op_xxx handlers in hmcs40.h declaration order) — kept in sync by
-//  hand; the Verilator coverage sweep is what actually proves this file
-//  is correct, not the comment.
-//
 //============================================================================
 
 module hmcs40_decoder (

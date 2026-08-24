@@ -29,11 +29,9 @@ module emu
 	//Master input clock
 	input         CLK_50M,
 
-	//Async reset from top-level module.
 	//Can be used as initial reset.
 	input         RESET,
 
-	//Must be passed to hps_io module
 	inout  [48:0] HPS_BUS,
 
 	//Base video clock. Usually equals to CLK_SYS.
@@ -44,7 +42,6 @@ module emu
 	output        CE_PIXEL,
 
 	//Video aspect ratio for HDMI. Most retro systems have ratio 4:3.
-	//if VIDEO_ARX[12] or VIDEO_ARY[12] is set then [11:0] contains scaled size instead of aspect ratio.
 	output [12:0] VIDEO_ARX,
 	output [12:0] VIDEO_ARY,
 
@@ -67,12 +64,6 @@ module emu
 
 `ifdef MISTER_FB
 	// Use framebuffer in DDRAM (USE_FB=1 in qsf)
-	// FB_FORMAT:
-	//    [2:0] : 011=8bpp(palette) 100=16bpp 101=24bpp 110=32bpp
-	//    [3]   : 0=16bits 565 1=16bits 1555
-	//    [4]   : 0=RGB  1=BGR (for 16/24/32 modes)
-	//
-	// FB_STRIDE either 0 (rounded to 256 bytes) or multiple of pixel size (in bytes)
 	output        FB_EN,
 	output  [4:0] FB_FORMAT,
 	output [11:0] FB_WIDTH,
@@ -85,7 +76,6 @@ module emu
 
 `ifdef MISTER_FB_PALETTE
 	// Palette control for 8bit modes.
-	// Ignored for other video modes.
 	output        FB_PAL_CLK,
 	output  [7:0] FB_PAL_ADDR,
 	output [23:0] FB_PAL_DOUT,
@@ -97,14 +87,10 @@ module emu
 	output        LED_USER,  // 1 - ON, 0 - OFF.
 
 	// b[1]: 0 - LED status is system status OR'd with b[0]
-	//       1 - LED status is controled solely by b[0]
-	// hint: supply 2'b00 to let the system control the LED.
 	output  [1:0] LED_POWER,
 	output  [1:0] LED_DISK,
 
 	// I/O board button press simulation (active high)
-	// b[1]: user button
-	// b[0]: osd button
 	output  [1:0] BUTTONS,
 
 	input         CLK_AUDIO, // 24.576 MHz
@@ -124,7 +110,6 @@ module emu
 	input         SD_CD,
 
 	//High latency DDR3 RAM interface
-	//Use for non-critical time purposes
 	output        DDRAM_CLK,
 	input         DDRAM_BUSY,
 	output  [7:0] DDRAM_BURSTCNT,
@@ -151,7 +136,6 @@ module emu
 
 `ifdef MISTER_DUAL_SDRAM
 	//Secondary SDRAM
-	//Set all output SDRAM_* signals to Z ASAP if SDRAM2_EN is 0
 	input         SDRAM2_EN,
 	output        SDRAM2_CLK,
 	output [12:0] SDRAM2_A,
@@ -171,10 +155,6 @@ module emu
 	input         UART_DSR,
 
 	// Open-drain User port.
-	// 0 - D+/RX
-	// 1 - D-/TX
-	// 2..6 - USR2..USR6
-	// Set USER_OUT to 1 to read from USER_IN.
 	input   [6:0] USER_IN,
 	output  [6:0] USER_OUT,
 
@@ -211,17 +191,11 @@ assign BUTTONS = 0;
 wire [1:0] ar = status[14:13];
 
 // set_id: MRA index 5, captured inside champbas_rom and exposed by the game top.
-// Declared HERE, ahead of its first use in the aspect logic below — a forward reference would
-// implicitly create a 1-bit net and then collide with the real 8-bit declaration.
 //   0x00-0x06 champbas family (ROT0)   0x07 talbot   0x08-0x0A exctsccr family   (both ROT270)
 wire [7:0] set_id;
 wire is_vertical = (set_id >= 8'h07);
 
-// ASPECT-FIX-2026-07-30: was hard-wired to Kangaroo's ROT90 orientation, so champbas (ROT0)
 // got squashed into a 3:4 portrait window. Aspect must follow the SAME set_id split as the
-// rotation logic further down: champbas family (set_id <= 0x06) is horizontal 4:3; talbot and
-// the exctsccr family (0x07-0x0A) are ROT270 and want 3:4.
-// `horz` = the picture ends up horizontal, i.e. a ROT0 set, OR the user forced Horz in the OSD.
 wire horz = ~is_vertical | status[12];
 
 assign VIDEO_ARX = horz ? ((!ar) ? 12'd4 : (ar - 1'd1)) : ((!ar) ? 12'd3 : (ar - 1'd1));
@@ -302,12 +276,8 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 );
 
 ////////////////////   CLOCKS   ///////////////////
-// CLOCK-2026-07-30: single 49.152 MHz PLL, taken verbatim from Arcade-Kyugo
-// (rtl/pll.v + rtl/pll/pll_0002.v). It divides EXACTLY for this board:
 //     49.152 / 16 = 3.072 MHz = XTAL 18.432 / 6  -> both Z80s
 //     49.152 /  8 = 6.144 MHz = XTAL 18.432 / 3  -> pixel clock
-// The previous Kangaroo PLL emitted 40 MHz + 10 MHz, neither of which divides
-// to either figure. The cen dividers themselves live in rtl/ChampionBaseball.sv.
 wire CLK_49M;
 wire locked;
 
@@ -363,19 +333,10 @@ always @(posedge CLK_49M) begin
 end
 
 //////////////////  Game select (mod byte, MRA <rom index="5">)  ///////////////////////////
-// CONTROLS-2026-07-30: the whole Kangaroo game-select block (core_mod / is_funkyfish / mcu_present)
-// is gone — set_id now comes OUT of the core (champbas_rom captures MRA index 5) rather than being
-// decoded here, and neither Funky Fish nor the MB8841 exists on this hardware.
 
 //////////////////  Arcade Buttons/Interfaces   ///////////////////////////
 
 // champbas has THREE buttons (INPUT_PORTS champbas, champbas.cpp:761-771):
-//   BUTTON1 "throw" (red) · BUTTON2 "steal" (yellow) · BUTTON3 "changes" (blue)
-// Kangaroo had one, so every joystick slot AFTER the buttons shifts up by one versus what this
-// file inherited. CONF_STR's J1 list is updated to match, and the MRAs' <buttons names=...> use
-// the same order. Getting these out of step is what regressed Nibbler in the SNK6502 core.
-//   joystick bits: [3:0] up/down/left/right, [4] throw, [5] steal, [6] changes,
-//                  [7] coin, [8] start1, [9] start2, [10] pause
 
 //Player 1
 wire m_up1      = btn_up        | joystick_0[3];
@@ -405,25 +366,9 @@ wire m_pause    = btn_pause     | joystick_0[10];
 //Service Mode
 wire m_service  = btn_service                  ;
 
-// CTRL-UPDOWN-2026-07-31 — Exciting Soccer family (set_id 0x08-0x0A) only.
 // User reports Exciting Soccer's up/down inverted. Exciting Soccer boots
 // flip_screen=1 (maincpu.dasm $010C writes $00 to $A003) where champbas boots
-// $FF, so the game's frame is 180 deg from champbas's and only these sets are
 // affected. Left/right are deliberately NOT swapped — the report was
-// specifically "upside down"; if left/right are ALSO reversed then it is a full
-// 180 deg and the same swap should be applied to m_left/m_right.
-//
-// CAVEAT: this observation was made on the build that still contained the
-// FLIP-FETCH-FIX and SPR-FLIP-FIX defects, i.e. while the display orientation
-// itself was known-broken. Re-test after this build; if the controls are
-// correct WITHOUT this, set ctrl_flip_ud to 1'b0 or delete the block.
-// PARKED 2026-07-31 (user: "hold off on fixing controls until the game is
-// working"). Every control observation so far has been taken while the sprite
-// orientation was still moving, so each reading measured a different renderer —
-// which is why up/down and left/right kept trading places. Forced to 0 = plain
-// MAME mapping, a known baseline, so controls stop being a moving variable.
-// Re-enable by restoring the set_id test once the rendering is final:
-//   wire ctrl_flip_ud = (set_id >= 8'h08) && (set_id <= 8'h0A);
 wire ctrl_flip_ud = 1'b0;
 
 wire m_up1_c   = ctrl_flip_ud ? m_down1 : m_up1;
@@ -431,27 +376,17 @@ wire m_down1_c = ctrl_flip_ud ? m_up1   : m_down1;
 wire m_up2_c   = ctrl_flip_ud ? m_down2 : m_up2;
 wire m_down2_c = ctrl_flip_ud ? m_up2   : m_down2;
 
-// CTRL-LEFTRIGHT-2026-07-31: user confirmed up/down now correct but LEFT/RIGHT
 // reversed, which completes the picture — flip_screen=1 is a 180 deg transform,
-// so BOTH control axes invert, not just one. Same gate as the up/down swap.
 wire m_left1_c  = ctrl_flip_ud ? m_right1 : m_left1;
 wire m_right1_c = ctrl_flip_ud ? m_left1  : m_right1;
 wire m_left2_c  = ctrl_flip_ud ? m_right2 : m_left2;
 wire m_right2_c = ctrl_flip_ud ? m_left2  : m_right2;
 
 // MAME port assembly. All champbas inputs are IP_ACTIVE_LOW, so these invert.
-//   P1/P2 : b0 BUTTON1(throw)  b1 unused  b2 BUTTON3(changes)  b3 BUTTON2(steal)
-//           b4 UP  b5 LEFT  b6 RIGHT  b7 DOWN                    (champbas.cpp:711-714, 762-765)
-//   SYSTEM: b0 START1  b1 START2  b2 COIN1  b3 COIN2  b4-7 unknown   (:748-755)
-// ORIGINAL (pre CTRL-UPDOWN-2026-07-31, used m_up1/m_down1 directly):
-//   wire [7:0] p1_port = ~{m_down1, m_right1, m_left1, m_up1, m_steal1, m_change1, 1'b0, m_throw1};
-//   wire [7:0] p2_port = ~{m_down2, m_right2, m_left2, m_up2, m_steal2, m_change2, 1'b0, m_throw2};
 wire [7:0] p1_port     = ~{m_down1_c, m_right1_c, m_left1_c, m_up1_c, m_steal1, m_change1, 1'b0, m_throw1};
 wire [7:0] p2_port     = ~{m_down2_c, m_right2_c, m_left2_c, m_up2_c, m_steal2, m_change2, 1'b0, m_throw2};
 wire [7:0] system_port = ~{4'b0000, m_coin2, m_coin1, m_start2, m_start1};
 
-// HISCORE SYSTEM — re-enabled 2026-08-24. MAIN now exposes a RAM port (main_ram
-// port B was freed by DETEAR-2026-08-01) and the hiscore.dat entries are in the MRAs.
 wire [15:0] hs_address;
 wire  [7:0] hs_data_in;
 wire  [7:0] hs_data_out;
@@ -480,16 +415,10 @@ wire hs, vs;
 wire [7:0] r, g, b;
 wire ce_pix;
 
-// CLOCK-2026-07-30: the DIAG-2026-06-18 "2x pixel clock" block was removed here, following its own
 // documented revert path ("arcade_video back to #(256,24) and drop .ce_pix below"). It existed to
-// double Kangaroo's 5 MHz ce_pix out of the 10 MHz domain into the 40 MHz domain. Both of those
-// clocks are gone: the core now runs entirely on CLK_49M and emits a real 6.144 MHz ce_pix, so
-// arcade_video can take the core's own ce_pix through .* with no doubling.
 
 // ROTATION: champbas is ROT0 (horizontal). Talbot and the whole Exciting Soccer family are ROT270.
-// Driven off the MRA set-id rather than hard-coded, since one core serves all three variants.
 //   0x00-0x06 champbas family (ROT0)   0x07 talbot   0x08-0x0A exctsccr family (both ROT270)
-// #unverified: not yet checked on hardware for the ROT270 sets.
 wire rotate_ccw  = 1'b1;                                    // ROT270 = counter-clockwise
 wire no_rotate   = ~is_vertical | status[12] | direct_video;
 wire flip        = status[11];
@@ -511,9 +440,6 @@ arcade_video #(256,24) arcade_video
 );
 
 // DIP switch
-// DIP-FIX-2026-06-21: DIPs arrive from the OSD via ioctl index 254 (standard MiSTer DIP download), NOT status.
-// Was `sw0 = status[7:0]` — a placeholder that never received the OSD DIP edits → "always 3 lives". Mirrors
-// Kyugo (Arcade-Kyugo.sv:487). The MRA <switches default=..> is downloaded here; sw0 = DSW0 (read at 0xe400).
 reg [7:0] dip_sw[8] = '{8'h00,8'h00,8'h00,8'h00,8'h00,8'h00,8'h00,8'h00};
 always @(posedge CLK_49M) begin
 	if (ioctl_wr && (ioctl_index == 8'd254) && !ioctl_addr[24:3])
@@ -521,12 +447,8 @@ always @(posedge CLK_49M) begin
 end
 wire [7:0] sw0 = dip_sw[0];
 
-//Instantiate ChampionBaseball top-level game module
 ChampionBaseball championbaseball_inst
 (
-	// RESET-FIX-2026-07-30: was `.reset(~reset)`. That inversion existed because the KANGAROO game
-	// module took an ACTIVE-LOW reset. Every champbas module is written active-high
-	// (`if (reset) h_cnt <= 0`, `.RESET_n(~reset)` into T80s), so the inversion held the entire core
 	// in permanent reset: h_cnt/v_cnt never left 0, HSync/VSync were stuck low, no sync at all.
 	.reset(reset),        // MiSTer reset is active-high; champbas modules are active-high too
 
@@ -568,7 +490,6 @@ ChampionBaseball championbaseball_inst
 
 	.pause(pause_cpu)
 );
-
 
 hiscore #(
 	.HS_ADDRESSWIDTH(16),

@@ -66,24 +66,18 @@
     <!-- Index 5: game-select byte: 
            0x00 champbas    0x01 champbasj   0x02 champbasja  0x03 champbasjb
            0x04 champbb2    0x05 champbb2j   0x06 tbasebal    0x07 talbot
-           0x08 exctsccr    0x09 exctscc2    0x0A exctsccrb
-    -->
+           0x08 exctsccr    0x09 exctscc2    0x0A exctsccrb                   -->
     <rom index="5"><part>02</part></rom>
 
-
-    <!-- Index 3: hiscore config (hiscore.v v0014, CFG_LENGTHWIDTH=2).
-         Header: START_WAIT, CHECK_WAIT, CHECK_HOLD, WRITE_HOLD, REPEATCOUNT, REPEATWAIT, PAUSEPAD, CHANGEMASK
-         Entries [ADDR:4][LEN:2][START:1][END:1].
-         champbasja uses the same table as champbas:
-             @:maincpu,program,8c30,2f,40,00
-             @:maincpu,program,8c5c,1,05,05 -->
+    <!-- Index 3: HiScore data - not working
     <rom index="3" md5="none">
         <part>
-        00 00 FF FF 00 FF 00 02 00 02 00 01 11 11 00 00
+        00 00 FF FF 00 FF 00 10 00 10 00 08 FF FF 00 00
         00 00 8C 30 00 2F 40 00
         00 00 8C 5C 00 01 05 05
         </part>
     </rom>
+    -->
 
     <!-- Index 4: hiscore data. 0x2F + 0x01 = 48 bytes -->
     <rom index="4"></rom>

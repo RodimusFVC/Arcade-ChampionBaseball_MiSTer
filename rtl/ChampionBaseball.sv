@@ -1,15 +1,10 @@
 //============================================================================
 //
-//  ChampionBaseball.sv — game top level
+//  ChampionBaseball.sv — game top level: main board, sound board and ROMs.
 //  Copyright (C) 2026 Rodimus
 //
-//  Alpha Denshi champbas.cpp hardware.
-//  MAME reference: Useful Information/mame/champbas.cpp
-//
-//  Clocking: single 49.152 MHz PLL output (pll_0002.v, taken from Arcade-Kyugo).
-//  It divides EXACTLY for this board — no fractional divider needed:
-//      49.152 / 16 = 3.072 MHz  = XTAL 18.432 / 6   -> both Z80s
-//      49.152 /  8 = 6.144 MHz  = XTAL 18.432 / 3   -> pixel clock
+//    49.152 / 16 = 3.072 MHz = XTAL 18.432 / 6  -> both Z80s
+//    49.152 /  8 = 6.144 MHz = XTAL 18.432 / 3  -> pixel clock
 //
 //============================================================================
 
@@ -100,12 +95,10 @@ champbas_rom rom
 
     .audiocpu_addr(audiocpu_addr), .audiocpu_data(audiocpu_data),
 
-    // exctsccr plane-2 source (6_c5.bin verbatim); nibble split happens in VIDEO
     .gfx_p3_addr(gfx_p3_addr),     .gfx_p3_data(gfx_p3_data),
 
     .gfx3_addr(gfx3_addr),         .gfx3_data(gfx3_data),
 
-    // MCU-INTEGRATE-2026-08-01: ALPHA-8201 program ROM, now consumed by the
     // alpha8201 instance inside ChampionBaseball_MAIN.
     .mcu_addr(mcu_addr),           .mcu_data(mcu_data)
 );
@@ -122,7 +115,6 @@ wire       sound_latch_wr;
 
 ChampionBaseball_MAIN main_board
 (
-    // MCU-INTEGRATE-2026-08-01
     .mcu_addr(mcu_addr),
     .mcu_data(mcu_data),
 
@@ -185,12 +177,8 @@ ChampionBaseball_MAIN main_board
 
 //------------------------------------------------------- Sound board ---------------------------------------------------------//
 
-// EXCTSCCR-SND-2026-08-08: Exciting Soccer (0x08) and Exciting Soccer II (0x09)
 // have an ENTIRELY DIFFERENT sound board — own 14.318181 MHz crystal, 4 AYs on
-// Z80 I/O space, 2 DACs, NMI+IRQ. It is a separate module, not a variant of the
 // champbas board. exctsccrb (0x0A) is deliberately NOT included: that bootleg
-// runs champbas-family sound on a modified Champion Baseball board
-// (champbas.cpp:1146), so it stays on snd_board.
 wire use_exctsccr_snd = (set_id == 8'h08) || (set_id == 8'h09);
 
 wire signed [15:0] snd_mono;
@@ -213,7 +201,6 @@ ChampionBaseball_SND snd_board
     .sound_latch_wr(sound_latch_wr),
 
     // The AY physically lives on the MAIN board and is written by the MAIN CPU
-    // at $7000/$7001; only its register writes are routed across.
     .ay_din(ay_din),
     .ay_addr_wr(ay_addr_wr),
     .ay_data_wr(ay_data_wr),

@@ -1,22 +1,7 @@
 //============================================================================
 //
-//  ChampionBaseball_SND.sv
-//
-//  Sound for the Alpha Denshi champbas.cpp hardware.
-//  MAME reference: champbas_sound_map :659, machine cfg :980-1004
-//  Verified against Useful Information/disassembly/champbas_audiocpu.dasm
-//
-//  Z80 @ XTAL 18.432/6 = 3.072 MHz driving a 6-bit R2R DAC, plus an
-//  AY-3-8910 @ 18.432/12 = 1.536 MHz.
-//
-//  !! The AY is NOT on this board on real hardware — it sits on the MAIN board
-//  and is written by the MAIN CPU at $7000/$7001 (champbas.cpp:579). It is
-//  instantiated here only so all audio lives in one place; its register writes
-//  arrive via ay_* from ChampionBaseball_MAIN. The sound CPU drives ONLY the DAC.
-//
-//  champbas has NO sound interrupt — the audio CPU polls the latch (`di` at
-//  $0000 in the dasm, and champbas() configures no timer). exctsccr differs:
-//  it adds a 4 kHz NMI and a 75 Hz timer IRQ (:1091-1095).
+//  ChampionBaseball_SND.sv — champbas sound board: Z80 driving a DAC only.
+//  The AY is on the MAIN board (champbas.cpp:579); this CPU never sees it.
 //
 //============================================================================
 
@@ -44,15 +29,6 @@ module ChampionBaseball_SND
 
     ////////////////////////////////////////////////////////////////////////
     // Address decode — champbas_sound_map (champbas.cpp:659)
-    //
-    //   0000-5FFF  ROM
-    //   6000       R  soundlatch        (mirror 1FFF)
-    //   8000       W  4-bit return code to main CPU — UNUSED (mirror 1FFF)
-    //   A000       W  soundlatch clear  (mirror 1FFF)
-    //   C000       W  DAC               (mirror 1FFF)
-    //   E000-E3FF  RAM                  (mirror 1C00)
-    //
-    // Every region is 8KB-aligned once mirroring is applied, so A[15:13] alone
     // decodes it. Corroborated by the dasm: `ld sp,$E3FF` at $0001 puts the
     // stack at the top of RAM, and $0005/$0008/$0011 hit A000/8000/C000.
     ////////////////////////////////////////////////////////////////////////
@@ -74,8 +50,6 @@ module ChampionBaseball_SND
 
     ////////////////////////////////////////////////////////////////////////
     // Sound latch (MAME GENERIC_LATCH_8).
-    // Written by the MAIN CPU at $A080, read here at $6000, cleared by this
-    // CPU writing $A000. The audio CPU clears it at boot ($0005).
     ////////////////////////////////////////////////////////////////////////
 
     reg [7:0] latch_reg = 8'd0;
@@ -88,8 +62,6 @@ module ChampionBaseball_SND
 
     ////////////////////////////////////////////////////////////////////////
     // 6-bit R2R DAC at $C000. The dasm initialises it to $20 at $000F-$0011,
-    // exactly mid-scale for a 6-bit range (0..63) — which confirms the low 6
-    // bits are the payload rather than the high 6.
     ////////////////////////////////////////////////////////////////////////
 
     reg [5:0] dac_reg = 6'd32;
@@ -100,7 +72,6 @@ module ChampionBaseball_SND
     end
 
     // Centre on mid-scale, then scale to FULL 16-bit range: (-32..+31) << 10
-    // gives -32768..+31744. Attenuation happens once, in the mix below.
     wire signed [16:0] dac_signed = ($signed({10'd0, dac_reg}) - 17'sd32) <<< 10;
 
     ////////////////////////////////////////////////////////////////////////
@@ -126,17 +97,9 @@ module ChampionBaseball_SND
 
     ////////////////////////////////////////////////////////////////////////
     // AY-3-8910 (jt49 by Jotego). Pattern taken from the hardware-verified
-    // TimePilot core (TimePilot_SND.sv:226): jt49_bus, sel=1, per-channel
-    // outputs through jt49_dcrm2. TimePilot also runs on a 49 MHz clock.
-    //
     // champbas uses ay8910_device::data_address_w, so $7000 = DATA and
     // $7001 = ADDRESS. In AY bus terms: address latch = {bdir,bc1} = 11,
-    // data write = 10. champbb2j inverts the two, but MAIN already resolves
-    // that from set_id, so the strobes arrive here already correct.
-    //
     // The strobes MUST be stretched: the Z80 write pulse is ~24 clk wide while
-    // cen_ay is 1-in-32, so driving bdir straight off the decode can miss the
-    // AY entirely. Held until a cen_ay tick consumes it.
     ////////////////////////////////////////////////////////////////////////
 
     reg        ay_pending = 1'b0;
@@ -187,21 +150,6 @@ module ChampionBaseball_SND
 
     ////////////////////////////////////////////////////////////////////////
     // Mix. MAME routes the AY at 0.3 and the DAC at 0.7 (:1002, :1004), so the
-    // DAC is the dominant voice — most of champbas's audio is sampled speech
-    // and effects through the DAC, not AY tones.
-    //
-    // GAIN-FIX-2026-07-30: HW-confirmed "correct sounds but volume kinda low".
-    // The first version attenuated TWICE — each AY channel ended at 1/8 and the
-    // DAC at 1/4 of full scale. Now each source is scaled ONCE, with the budget
-    // worked out so the sum cannot exceed 16 bits:
-    //     DAC : +/-32768 x 0.75 = +/-24576   (~76% of the mix)
-    //     AY  : 3 x +/-4080 = +/-12240 x 0.625 = +/-7650  (~24%)
-    //     worst case 24576 + 7650 = 32226  <  32767, so it cannot clip
-    // That split lands close to MAME's 0.7/0.3 without needing a multiplier.
-    // Net change: DAC ~3x louder, AY ~5x louder.
-    //
-    // #unverified: the RATIO is from the MAME machine config, not a real board.
-    // Tune by ear if the AY drowns out the DAC or vice versa.
     ////////////////////////////////////////////////////////////////////////
 
     wire signed [17:0] ay_sum = {{2{ayA_dc[15]}}, ayA_dc}

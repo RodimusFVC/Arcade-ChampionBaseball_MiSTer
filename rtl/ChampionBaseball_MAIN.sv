@@ -1,25 +1,9 @@
 //============================================================================
 //
-//  ChampionBaseball_MAIN.sv
-//
-//  Main CPU board for the Alpha Denshi champbas.cpp hardware.
-//  MAME reference: champbas.cpp — champbas_map :576, machine cfg :964
-//
-//  Z80 @ XTAL 18.432 / 6 = 3.072 MHz, LS259 control latch, 32x32 tilemap,
-//  8 hardware sprites, watchdog on a vblank counter.
-//
-//  NOTE: the AY-3-8910 lives on THIS board and is written by the MAIN CPU at
-//  0x7000-0x7001 (champbas.cpp:579) — it is NOT on the sound board. The sound
-//  CPU drives only the DAC. Register writes are handed out via ay_* below.
-//
-//  CLOCKING: this module is deliberately clock-agnostic. It takes a free
-//  running `clk` plus two clock enables. The intended source is a 49.152 MHz
-//  PLL output, which divides EXACTLY:
-//      49.152 / 16 = 3.072 MHz  -> cen_cpu
-//      49.152 /  8 = 6.144 MHz  -> cen_pix   (18.432/3, see the VIDEO module)
-//  The inherited Kangaroo PLL emits 40 MHz / 10 MHz and cannot produce either;
-//  reconfiguring it is a separate step. No fractional divider is needed once
-//  the PLL is right.
+//  ChampionBaseball_MAIN.sv — main Z80 board: memory map, LS259 mainlatch,
+//  watchdog, sprite position RAM, ALPHA-8201 MCU and the video instance.
+//  The AY lives at 0x7000-0x7001 on THIS board, not the sound board
+//  (champbas.cpp:579). Per-set differences are selected by set_id.
 //
 //============================================================================
 
@@ -40,8 +24,6 @@ module ChampionBaseball_MAIN
     input         [7:0]  set_id,         // MRA index 5
 
     // ---- hiscore RAM access. Two windows, because the hiscore.dat entries
-    // live in different memories per set: champbas/exctsccrb in main RAM
-    // (8800-8FFF), exctsccr/exctscc2 in the 7C00-7FFF block.
     input        [15:0]  hs_addr,
     input         [7:0]  hs_din,
     output        [7:0]  hs_dout,
@@ -50,8 +32,6 @@ module ChampionBaseball_MAIN
 
     input                crt_flip,       // OSD CRT Flip
 
-    // MCU-INTEGRATE-2026-08-01: ALPHA-8201 program ROM (MRA index 6), served by
-    // champbas_rom. Pin-compatible with that module's mcu_addr/mcu_data.
     output       [12:0]  mcu_addr,
     input         [7:0]  mcu_data,
 
@@ -59,7 +39,6 @@ module ChampionBaseball_MAIN
     output       [14:0]  rom_addr,
     input         [7:0]  rom_data,
 
-    // ---- gfx + prom ports, passed through to the video module
     output       [13:0]  gfx_addr,
     input         [7:0]  gfx_data,
     output        [9:0]  prom_addr,
@@ -82,7 +61,6 @@ module ChampionBaseball_MAIN
     output        [7:0]  sound_latch,
     output               sound_latch_wr,
 
-    // ---- palette PROM download snoop, passed to the video module
     input                clk_dl,
     input                ioctl_download,
     input         [7:0]  ioctl_index,
@@ -98,11 +76,6 @@ module ChampionBaseball_MAIN
 
     ////////////////////////////////////////////////////////////////////////
     // Address decode — champbas_map (champbas.cpp:576)
-    //
-    //   0000-5FFF  ROM
-    //   7000-7001  (mirror 0FFE)  W  AY-3-8910 data_address_w
-    //   8000-87FF  RW VRAM   (tilemap_w)
-    //   8800-8FFF  RW main RAM   (8FF0-8FFF = sprite attribute table)
     //   A000       R  P1     | A000-A007  W  LS259 write_d0
     //   A040       R  P2     | A060-A06F  W  spriteram (x/y only)
     //   A080       R  DSW (mirror 0020) | A080  W  soundlatch
@@ -120,20 +93,9 @@ module ChampionBaseball_MAIN
     //                       at 0x6800-0x68FF                        (:603-608)
     //   champbasjb (0x03) : 0x6000-0x63FF = plain RAM, no protection (:611-615)
     // For champbasj the 8201 also processes that RAM, so plain RAM alone will
-    // not satisfy its protection — harmless, and it is what we have until the
-    // HMCS40 core exists.
-    // EXCTSCCR-MAP-FIX-2026-07-31: the whole Exciting Soccer family derives from
     // champbasj_map, so ALL of them get the 0x6000-0x63FF RAM — exctsccr_map
-    // (champbas.cpp:640) and exctsccrb_map (:649) both start `champbasj_map(map)`.
-    // ORIGINAL: wire set_has_extram = (set_id == 8'h01) || (set_id == 8'h02) || (set_id == 8'h03);
-    // MCU-INTEGRATE-2026-08-01: talbot (0x07) also derives from champbasj_map and
-    // instantiates the ALPHA-8201 (champbas.cpp:938), so it needs this window too.
-    // CHAMPBB2-MAP-FIX-2026-08-08: champbb2 (0x04) and champbb2j (0x05) were missing
-    // from this list. champbb2_map (champbas.cpp:618) starts `champbasj_map(map)`,
     // so they get the 0x6000-0x63FF shared-RAM window like every other J-family set.
-    // ORIGINAL: wire set_has_extram = (set_id == 8'h01) || (set_id == 8'h02) || (set_id == 8'h03)
     //                              || (set_id == 8'h07)
-    //                              || ((set_id >= 8'h08) && (set_id <= 8'h0A));
     wire set_has_extram = (set_id == 8'h01) || (set_id == 8'h02) || (set_id == 8'h03)
                        || (set_id == 8'h04) || (set_id == 8'h05)
                        || (set_id == 8'h07)
@@ -141,62 +103,28 @@ module ChampionBaseball_MAIN
 
     // Sets where a REAL ALPHA-8201 drives the shared RAM:
     //   champbasj 0x01 · talbot 0x07 · exctsccr 0x08 · exctscc2 0x09
-    // exctsccrb (0x0A) is DELIBERATELY EXCLUDED: the Kazutomi bootleg has the
-    // 8201 fitted but UNUSED, that set is currently working on plain RAM, and
-    // letting an MCU scribble on a window the game uses as scratch could only
-    // break it. Do not "complete" this list without a reason.
-    // CHAMPBB2-MCU-FIX-2026-08-08: champbb2 (0x04) / champbb2j (0x05) also carry a
-    // REAL ALPHA-8201 — champbb2(config) derives from champbasj(config)
-    // (champbas.cpp:1036) and ROM_START(champbb2) loads alpha-8302_44801b35.bin
-    // (:1327). That is the SAME MCU ROM (crc edabac6c) exctsccr already runs
-    // successfully, and the champbb2 MRA already loads it at index 6 — so this
-    // reuses an exercised path rather than opening a new one.
-    // ⚠️ If champbb2 now hangs in protection instead of erroring, back THIS line out
-    // first (one line, independent of the ROM/extram fixes) — plain RAM is the
-    // fallback and champbasj already lives with it.
-    // ORIGINAL: wire set_has_mcu = (set_id == 8'h01) || (set_id == 8'h07)
-    //                           || (set_id == 8'h08) || (set_id == 8'h09);
     wire set_has_mcu    = (set_id == 8'h01) || (set_id == 8'h04) || (set_id == 8'h05)
                        || (set_id == 8'h07)
                        || (set_id == 8'h08) || (set_id == 8'h09);
     wire set_has_prot   = (set_id == 8'h02);
 
     // exctsccr (0x08) and exctscc2 (0x09) use exctsccr_map, which ADDS
-    // `map(0x7c00,0x7fff).ram()` and UNMAPS the AY from the main CPU
-    // (`map(0x7000,0x7001).unmaprw()` — the audiocpu owns the AY on that board).
-    // exctsccrb (0x0A) uses exctsccrb_map, which does NEITHER: it keeps
-    // champbas's AY mirrored across the whole 0x7xxx page. Missing this 1KB is
-    // what made exctsccr's self-test report RAM ERROR 7CXX.
     wire set_is_exctsccr_full = (set_id == 8'h08) || (set_id == 8'h09);
 
     // Only talbot's MCU security-checks the watchdog bit, and only talbot needs
-    // the watchdog RESET (see the watchdog block below).
     wire set_is_talbot = (set_id == 8'h07);
 
     wire cs_extram = set_has_extram && (A[15:10] == 6'b0110_00);   // 6000-63FF
     wire cs_prot   = set_has_prot   && (A[15:8]  == 8'h68);        // 6800-68FF
     wire cs_ram7c  = set_is_exctsccr_full && (A[15:10] == 6'b0111_11);  // 7C00-7FFF
 
-    // CHAMPBB2-ROM7-FIX-2026-08-08 — the cause of the "ROM 7" self-test error.
-    //
     // champbb2/champbb2j add a SECOND ROM window at 0x7800-0x7FFF
-    // (champbas.cpp:621, `map(0x7800,0x7fff).rom()`). It is the ONLY
-    // non-contiguous region in the whole driver: epr5931 loads at 0x7800, not at
     // 0x6000 (:1319). The MRA is already correct — it pads 0x1800 to place the ROM
-    // there — so this was never a ROM-load problem. MAIN simply never decoded the
-    // window, so the self-test checksummed the read-mux default over it and
-    // reported ROM 7.
-    //
     // 0x7800-0x7FFF must also win over cs_ay: in MAME the later `.rom()` entry
-    // covers that range, and champbb2's AY mirror is a WRITE map, so reads there
-    // are ROM. Excluding it from cs_ay keeps writes from double-decoding.
-    // ORIGINAL: wire cs_rom = (A < 16'h6000);
     wire set_has_rom78 = (set_id == 8'h04) || (set_id == 8'h05);   // champbb2, champbb2j
     wire cs_rom78 = set_has_rom78 && (A[15:11] == 5'b0111_1);      // 7800-7FFF
     wire cs_rom   = (A <  16'h6000) || cs_rom78;
     // 0x7000-0x7001 mirrored across 0x7000-0x7FFF (mirror mask 0x0FFE leaves A0 significant)
-    // ORIGINAL: wire cs_ay = (A[15:12] == 4'h7);
-    // ORIGINAL: wire cs_ay = (A[15:12] == 4'h7) && !set_is_exctsccr_full;
     wire cs_ay    = (A[15:12] == 4'h7) && !set_is_exctsccr_full && !cs_rom78;
     wire cs_vram  = (A[15:11] == 5'b1000_0);          // 8000-87FF
     wire cs_ram   = (A[15:11] == 5'b1000_1);          // 8800-8FFF
@@ -222,11 +150,6 @@ module ChampionBaseball_MAIN
 
     ////////////////////////////////////////////////////////////////////////
     // AY-3-8910 register select
-    //
-    // champbas uses data_address_w: offset 0 = DATA, offset 1 = ADDRESS
-    // (champbas.cpp:579). champbb2j inverts this to address_data_w (:628),
-    // which is the ONLY difference in that set's map — hence the set_id test
-    // rather than a separate code path.
     ////////////////////////////////////////////////////////////////////////
 
     localparam SET_CHAMPBB2J = 8'h05;                  // see any MRA's index-5 enumeration
@@ -244,13 +167,6 @@ module ChampionBaseball_MAIN
 
     ////////////////////////////////////////////////////////////////////////
     // LS259 mainlatch @ 9D (champbas.cpp:970-978), written with D0.
-    //
-    //   0 irq_enable   1 !WORK (nc)   2 gfxbank      3 flip (INVERTED)
-    //   4 palettebank  5 nc           6 MCU start    7 MCU bus dir
-    //
-    // Talbot nops 2 and 4; exctsccr nops 4. Those are "this game never writes
-    // them" facts, not decode differences, so the latch is wired uniformly and
-    // the unused bits simply stay 0.
     ////////////////////////////////////////////////////////////////////////
 
     reg [7:0] mainlatch = 8'd0;
@@ -262,55 +178,38 @@ module ChampionBaseball_MAIN
 
     wire irq_mask     = mainlatch[0];
     wire gfx_bank     = mainlatch[2];
-    // ORIGINAL: wire flip_screen = ~mainlatch[3];
     // CRT Flip XORs into the game's own cocktail flip -- the one signal the whole
-    // video path already keys off, so it reuses only paths that ship working.
     wire flip_screen  = (~mainlatch[3]) ^ crt_flip;   // .invert() at :974 undone here
     wire palette_bank = mainlatch[4];
 
     ////////////////////////////////////////////////////////////////////////
     // Watchdog — set_vblank_count(0x10) at :983.
-    //
-    // Its counter is also READ BACK as DSW bit 7 via watchdog_bit2()
     // (:487, :745):  (0x10 - counter) >> 2 & 1
     // This is NOT a dip switch. The MRA deliberately omits bit 7 and the
-    // value is substituted here.
     ////////////////////////////////////////////////////////////////////////
 
     reg [4:0] wdog_cnt = 5'd0;
     reg       vblank_d = 1'b0;
     wire      vblank_rise = video_vblank & ~vblank_d;
 
-    // WDOG-FIX-2026-07-30 (found in Verilator sim, not on hardware):
     // vblank_d MUST track video_vblank continuously, including during reset.
-    // Previously it was reset to 0 while video_vblank is already 1 at reset
-    // (v_cnt=0, and vblank = v_cnt < 16), so releasing reset manufactured a
-    // FALSE vblank rising edge and ticked wdog_cnt to 1. wdog_cnt==1 gives
-    // 0x10-1 = 0b01111, whose bit[2] is 1 — so watchdog_bit2() read back as 1
-    // through DSW bit 7, and the boot code at $00A3-$00A7
-    //     ld a,($A080) / add a,a / jr c,$00A7
-    // hung FOREVER (that jr targets itself and never re-reads the port).
     // Measured: first $A080 read returned 0xA6 with wdog_cnt=1.
     always_ff @(posedge clk) begin
         vblank_d <= video_vblank;
         if (reset_i)          wdog_cnt <= 5'd0;
         else if (wdog_wr)     wdog_cnt <= 5'd0;
         // ~pause: video keeps running while paused, but the CPU cannot kick $A0C0,
-        // so an unfrozen counter would trip the watchdog reset after 16 vblanks.
         else if (vblank_rise && !pause) wdog_cnt <= wdog_cnt + 5'd1;
     end
 
     // 16 vblanks without an $A0C0 kick resets the CPU side (MAME:
-    // WATCHDOG_TIMER(...).set_vblank_count("screen", 0x10), champbas.cpp:941).
     // Without it the boot spin at $003F ("jr c,$003F", a jump to itself) never
     // ends, and wdog_cnt runs past 0x10 so the bit-2 readback stops matching MAME
     // -- which is the bit Talbot's MCU security-checks against bit 2 of $8C00
     // (champbas.cpp:63-65). Video timing is deliberately NOT reset: the real board's
-    // watchdog pulls CPU reset while the LS-counter video chain keeps running.
     reg [3:0] wdog_rst_cnt = 4'd0;
     always_ff @(posedge clk) begin
         if (reset)                     wdog_rst_cnt <= 4'd0;
-        // ORIGINAL (all sets): else if (wdog_cnt == 5'h10) wdog_rst_cnt <= 4'hF;
         else if (set_is_talbot && wdog_cnt == 5'h10) wdog_rst_cnt <= 4'hF;
         else if (wdog_rst_cnt != 4'd0) wdog_rst_cnt <= wdog_rst_cnt - 4'd1;
     end
@@ -319,16 +218,12 @@ module ChampionBaseball_MAIN
     // wdog_cnt counts UP from a kick, so it is ALREADY MAME's (0x10 - counter):
     // MAME's m_counter loads 0x10 and counts DOWN (watchdog.cpp:112 / :165).
     // Subtracting a second time inverted the bit on 6 frames in 8.
-    // ORIGINAL: wire [4:0] wdog_diff = 5'h10 - wdog_cnt;
-    // ORIGINAL: wire       wdog_bit2 = wdog_diff[2];
     wire       wdog_bit2 = wdog_cnt[2];
 
     wire [7:0] dsw_read = {wdog_bit2, dsw[6:0]};
 
     ////////////////////////////////////////////////////////////////////////
     // Sprite position RAM — A060-A06F, 16 bytes, WRITE ONLY from the CPU
-    // (champbas.cpp:590 is .writeonly()). Holds x/y only; code/colour/flip
-    // live in main RAM at 8FF0-8FFF. Small enough to be registers.
     ////////////////////////////////////////////////////////////////////////
 
     reg [7:0] spriteram [0:15];
@@ -341,21 +236,8 @@ module ChampionBaseball_MAIN
     end
 
     ////////////////////////////////////////////////////////////////////////
-    // DETEAR-2026-08-01 — sprite half of the frame snapshot.
-    //
-    // The video module snapshots tilemap RAM once per frame (see its DETEAR
-    // block). Everything else that is scanned out must be latched at the SAME
     // instant, or sprites stay live while the background lags one frame and
-    // they visibly swim against the scrolling pitch.
-    //
-    // Three 16-byte sources: spriteram ($A060), spriteram2 ($A040), and the
     // sprite ATTRIBUTE window in main RAM ($8FF0 for champbas, $8800 for
-    // exctsccr — champbas.cpp:399 / :451). The attribute window is shadowed off
-    // CPU WRITES rather than read back through main_ram's port B, which frees
-    // that port entirely and keeps the snapshot a pure register copy.
-    //
-    // To REVERT: drive spr_pos_data/spr_attr_data from the live arrays and
-    // main_ram q_b again, and ignore vsnap.
     ////////////////////////////////////////////////////////////////////////
 
     wire        vsnap;
@@ -383,9 +265,6 @@ module ChampionBaseball_MAIN
 
     ////////////////////////////////////////////////////////////////////////
     // Main RAM — 8800-8FFF (2KB).
-    //
-    // Port B serves the sprite engine's attribute reads. champbas keeps sprite
-    // code/colour/flip in MAIN RAM at 8FF0-8FFF (champbas.cpp:399), which is
     // offset 0x7F0 within this 2KB region — NOT in spriteram.
     ////////////////////////////////////////////////////////////////////////
 
@@ -395,14 +274,12 @@ module ChampionBaseball_MAIN
 
     // Hiscore RAM windows. Talbot's table lives in VRAM (champbas_map:580 maps
     // 8000-87FF as vram) -- it is stamped there from ROM at $4001 and there is
-    // no work-RAM copy, so that window has to be reachable too.
     wire hs_sel_ram   = (hs_addr[15:11] == 5'b1000_1);    // 8800-8FFF main RAM
     wire hs_sel_ram7c = (hs_addr[15:10] == 6'b0111_11);   // 7C00-7FFF exctsccr
     wire hs_sel_vram  = (hs_addr[15:11] == 5'b1000_0);    // 8000-87FF tilemap
     wire [7:0] hs_ram_dout, hs_ram7c_dout;
 
     // Every source is a REGISTERED memory read, so the select is delayed one
-    // clock to line up with the data it picks.
     reg [1:0] hs_src_r;
     always_ff @(posedge clk)
         hs_src_r <= hs_sel_ram7c ? 2'd2 : hs_sel_vram ? 2'd1 : 2'd0;
@@ -415,8 +292,6 @@ module ChampionBaseball_MAIN
         .wren_a(cen_cpu & mem_wr & cs_ram),
         .q_a(ram_dout),
 
-        // DETEAR-2026-08-01 freed port B from the sprite attribute reads
-        // (those come from the snapshot array below); hiscore uses it now.
         .clock_b(clk),
         .address_b(hs_addr[10:0]),
         .data_b(hs_din),
@@ -424,18 +299,8 @@ module ChampionBaseball_MAIN
         .q_b(hs_ram_dout)
     );
 
-    // DETEAR-2026-08-01: attributes now come from the frame snapshot.
-    // ORIGINAL: main_ram q_b, addressed {(is_exctsccr ? 7'h00 : 7'h7F), spr_attr_addr}
-    //
-    // LATENCY-FIX-2026-08-01: this MUST stay a REGISTERED read. It replaced a
     // dpram_dc port-B read, whose q is registered — the sprite FSM issues
-    // spr_attr_addr on one cycle and consumes the data on the NEXT. A plain
-    // combinational array read (`assign spr_attr_data = spr_attr_s[addr];`)
-    // returns the entry for whatever address is on the bus in the CONSUMING
-    // cycle, so every sprite picked up a neighbouring slot's code/colour/flip —
-    // observed on hardware as "the ball is drawn as a player" in Champion
     // Baseball. Swapping a BRAM for registers changes read latency; preserve it.
-    // (spr_pos_data below was ALREADY combinational and is unaffected.)
     reg [7:0] spr_attr_data_r;
     always_ff @(posedge clk) spr_attr_data_r <= spr_attr_s[spr_attr_addr];
     assign spr_attr_data = spr_attr_data_r;
@@ -443,8 +308,6 @@ module ChampionBaseball_MAIN
     // Sprite position RAM read port (combinational — it is a register array)
     wire [3:0] spr_pos_addr;
     wire       spr_pos_bank;
-    // DETEAR-2026-08-01: read the SNAPSHOT copies, not the live arrays.
-    // ORIGINAL: spr_pos_bank ? spriteram2[spr_pos_addr] : spriteram[spr_pos_addr]
     wire [7:0] spr_pos_data = spr_pos_bank ? spriteram2_s[spr_pos_addr]
                                            : spriteram_s[spr_pos_addr];
 
@@ -470,10 +333,7 @@ module ChampionBaseball_MAIN
     );
 
     ////////////////////////////////////////////////////////////////////////
-    // EXCTSCCR-MAP-FIX-2026-07-31 — extra RAM at 0x7C00-0x7FFF (1KB).
-    // exctsccr_map only (champbas.cpp:644); NOT present on exctsccrb, where
     // that page is the mirrored AY instead. Its absence is what produced the
-    // "RAM ERROR 7CXX" self-test failure on exctsccr/exctscc2.
     ////////////////////////////////////////////////////////////////////////
 
     wire [7:0] ram7c_dout;
@@ -494,16 +354,8 @@ module ChampionBaseball_MAIN
     );
 
     ////////////////////////////////////////////////////////////////////////
-    // MCU-INTEGRATE-2026-08-01 — ALPHA-8201 (HD44801 / HMCS44).
-    //
     // LS259 bit 6 -> mcu_start_w, bit 7 -> bus_dir_w (champbas.cpp:935-936).
-    // Shared RAM is the 0x6000-0x63FF window (:599); when the MCU is fitted it
     // OWNS that RAM, so the plain ext_ram above is write-disabled and the read
-    // mux takes mcu_ext_dout instead.
-    //
-    // CEN_DIV=511 VERIFIED 2026-08-01: MAME clocks the device at
-    // XTAL(18'432'000)/6/8 = 384 kHz (champbas.cpp:938) and hmcs40.h:113
-    // (`execute_clocks_to_cycles`) divides by 4 -- "4 cycles per machine cycle"
     // -> 96 kHz. 49.152 MHz / 96 kHz = 512, so 512-1 = 511.
     ////////////////////////////////////////////////////////////////////////
 
@@ -532,12 +384,6 @@ module ChampionBaseball_MAIN
 
     ////////////////////////////////////////////////////////////////////////
     // champbasja fake protection (champbas.cpp:532-563).
-    //
-    // Not an MCU — a pure combinational function of the ADDRESS, which MAME
-    // documents outright:
-    //     bit 7        = offset bit 0
-    //     bits 4,3,0   = offset bit 6
-    // Everything else reads 0.
     ////////////////////////////////////////////////////////////////////////
 
     wire [7:0] prot_dout = (A[0] ? 8'h80 : 8'h00) | (A[6] ? 8'h19 : 8'h00);
@@ -549,8 +395,6 @@ module ChampionBaseball_MAIN
     wire [7:0] vram_dout;
 
     // VRAM has no spare port (port B drives the tilemap shadow copy), so the
-    // hiscore access borrows port A -- the CPU port. Safe because hiscore.v
-    // holds pause_cpu and waits on `paused` before it reads or writes.
     wire        hs_vram_own   = hs_active & hs_sel_vram;
     wire [10:0] vram_addr_cpu = hs_vram_own ? hs_addr[10:0] : A[10:0];
     wire  [7:0] vram_din_cpu  = hs_vram_own ? hs_din        : cpu_dout;
@@ -635,8 +479,6 @@ module ChampionBaseball_MAIN
 
     ////////////////////////////////////////////////////////////////////////
     // IRQ — vblank asserts IRQ0 only while irq_mask; irq_enable_w(0) clears it
-    // (champbas.cpp:492, :915). It is a HELD level, not a pulse: the game must
-    // clear the mask to release it.
     ////////////////////////////////////////////////////////////////////////
 
     reg irq_pending = 1'b0;
@@ -651,9 +493,6 @@ module ChampionBaseball_MAIN
 
     ////////////////////////////////////////////////////////////////////////
     // Z80
-    //
-    // T80s, matching Kyugo — Kyugo_CPU.sv:252 records that swapping the T80
-    // wrapper here made a CPU lose a timing race, so this is not a free choice.
     ////////////////////////////////////////////////////////////////////////
 
     T80s cpu
