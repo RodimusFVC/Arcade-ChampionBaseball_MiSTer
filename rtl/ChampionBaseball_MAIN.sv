@@ -536,6 +536,7 @@ module ChampionBaseball_MAIN
         .palette_bank(palette_bank),
 
         .is_exctsccr(is_exctsccr),
+        .is_talbot(set_is_talbot),
 
         .gfx_addr(gfx_addr),
         .gfx_data(gfx_data),

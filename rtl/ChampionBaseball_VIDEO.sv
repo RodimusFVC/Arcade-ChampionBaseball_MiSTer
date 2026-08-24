@@ -48,6 +48,7 @@ module ChampionBaseball_VIDEO
     // ---- hardware variant. exctsccr family (set_id 0x08-0x0A) differs in the
     //      tilemap colour formula, bit depth and palette decode.
     input               is_exctsccr,
+    input               is_talbot,       // set_id 0x07 — half-size gfx regions
 
     // ---- gfx ROM port (champbas_rom index 2 region, 16KB)
     output      [13:0]  gfx_addr,
@@ -677,8 +678,14 @@ module ChampionBaseball_VIDEO
     wire [1:0] s_k   = src_chunk + 2'd1;
     wire [5:0] s_off = {s_row[3], s_k, s_row[2:0]};   // byte within the 64-byte sprite
 
-    // planes 0/1 (all variants except 4bpp) live in the UPPER half of index 2
-    wire [13:0] spr_gfx_addr = {1'b1, s_code, s_off};
+    // planes 0/1 (all variants except 4bpp) live in the UPPER half of index 2.
+    // Talbot's gfx1/gfx2 are 0x1000 each (champbas: 0x2000 each), so the MRA's
+    // concatenated index-2 blob puts its sprites at 0x1000, not 0x2000. Its
+    // sprite code is 6 bits -- MAME masks 0x3f and talbot nops gfxbank
+    // (champbas.cpp:400, :931).
+    // ORIGINAL: wire [13:0] spr_gfx_addr = {1'b1, s_code, s_off};
+    wire [13:0] spr_gfx_addr = is_talbot ? {2'b01, s_code[5:0], s_off}
+                                         : {1'b1,  s_code,      s_off};
     // 3bpp plane 2: gfx2's second half = 6_c5[0x1000..] nibble-split, index 8 upper 4K
     wire [12:0] spr_p3_addr  = {1'b1, s_code[5:0], s_off};
     wire        spr_p3_hi    = s_code[6];
