@@ -18,7 +18,7 @@
     <about></about>
 
     <resolution>15kHz</resolution>
-    <rotation>vertical (cw)</rotation>
+    <rotation>vertical (ccw)</rotation>
     <flip>yes</flip>
 
     <players>2 (alternating)</players>

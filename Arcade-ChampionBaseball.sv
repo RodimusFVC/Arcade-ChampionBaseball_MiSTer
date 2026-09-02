@@ -76,7 +76,8 @@ localparam CONF_STR = {
 	"P1ODE,Aspect Ratio,Original,Full screen,[ARC1],[ARC2];",
 	"P1OC,Orientation,Vert,Horz;",
 	"P1OB,HDMI Flip,Off,On;",
-	"P1OM,CRT Flip,Off,On;",
+	// CRT Flip disabled: sprite path does not flip correctly (tiles do).
+	// "P1OM,CRT Flip,Off,On;",
 	"P1OFH,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
 	"-;",
 	"P2,Pause Options;",
